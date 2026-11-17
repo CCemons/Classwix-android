@@ -1,0 +1,6 @@
+{
+  "name": "ClassWiz 991LA",
+  "description": "Simulación exacta de la calculadora científica Casio ClassWiz fx-991LA CW con pantalla natural, modos completos e interfaz táctil de precisión.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
