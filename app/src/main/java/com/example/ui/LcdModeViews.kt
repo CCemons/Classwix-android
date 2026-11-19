@@ -313,26 +313,47 @@ fun LcdSettingsView(
     1 -> listOf(
       s.tr("Entrada/Salida", "Input/Output") to s.tr(s.inputOutput.labelEs, s.inputOutput.labelEn),
       s.tr("Unidad angular", "Angle Unit") to s.tr(s.angleUnit.labelEs, s.angleUnit.labelEn),
-      s.tr("Formato número", "Number Format") to s.numberFormat.name,
+      s.tr("Formato número", "Number Format") to when (s.numberFormat) {
+        NumberFormatMode.FIX -> "Fix ${s.fixDigits}"
+        NumberFormatMode.SCI -> "Sci ${s.sciDigits}"
+        NumberFormatMode.NORM_1 -> "Norm 1"
+        NumberFormatMode.NORM_2 -> "Norm 2"
+      },
       s.tr("Result. fracc.", "Fraction Result") to if (s.fractionFormat == FractionFormat.IMPROPER) "d/c" else "ab/c",
       s.tr("Complejos", "Complex Result") to s.complexFormat.labelEs,
       s.tr("Frecuencia Est.", "Stat Frequency") to if (s.statFrequency) s.tr("Sí", "On") else s.tr("No", "Off"),
+      s.tr("Separador dígit.", "Digit Separator") to if (s.digitSeparator) s.tr("Sí", "On") else s.tr("No", "Off"),
+      s.tr("Simplificar", "Simplify") to s.tr(s.simplifyMode.labelEs, s.simplifyMode.labelEn),
     )
     2 -> listOf(
       s.tr("Contraste LCD", "LCD Contrast") to "${(s.lcdContrast * 100).toInt()}%",
       s.tr("Tema pantalla", "Display Theme") to s.tr(s.lcdTheme.labelEs, s.lcdTheme.labelEn),
       s.tr("Idioma / Lang", "Language") to s.language.label,
       s.tr("Vibración táctil", "Haptic Feedback") to if (s.hapticsEnabled) s.tr("Sí", "On") else s.tr("No", "Off"),
+      s.tr("Versión QR", "QR Version") to s.tr(s.qrVersion.labelEs, s.qrVersion.labelEn),
+      s.tr("Apagado automát.", "Auto Power Off") to s.tr(s.autoPowerOff.labelEs, s.autoPowerOff.labelEn),
     )
     3 -> listOf(
       s.tr("Reiniciar config.", "Reset Settings") to "OK",
       s.tr("Borrar memoria", "Clear Memory") to "OK",
       s.tr("Inicializar todo", "Initialize All") to "OK",
     )
+    5 -> (0..9).map { d ->
+      val curD = if (state.settingsDetailKey == "FIX_DIGITS") s.fixDigits else s.sciDigits
+      "$d ${s.tr("dígitos", "digits")}" to if (d == curD) "●" else ""
+    }
     else -> when (state.settingsDetailKey) {
       "IO" -> InputOutputMode.entries.map { s.tr(it.labelEs, it.labelEn) to if (it == s.inputOutput) "●" else "" }
       "ANGLE" -> AngleUnit.entries.map { s.tr(it.labelEs, it.labelEn) to if (it == s.angleUnit) "●" else "" }
-      else -> NumberFormatMode.entries.map { it.name to if (it == s.numberFormat) "●" else "" }
+      else -> NumberFormatMode.entries.map {
+        val lbl = when (it) {
+          NumberFormatMode.FIX -> "Fix (0–9)"
+          NumberFormatMode.SCI -> "Sci (0–9)"
+          NumberFormatMode.NORM_1 -> "Norm 1"
+          NumberFormatMode.NORM_2 -> "Norm 2"
+        }
+        lbl to if (it == s.numberFormat) "●" else ""
+      }
     }
   }
 
@@ -341,6 +362,8 @@ fun LcdSettingsView(
     1 -> s.tr("Config. cálculo", "Calc Settings")
     2 -> s.tr("Config. sistema", "System Settings")
     3 -> s.tr("Reiniciar", "Reset")
+    5 -> if (state.settingsDetailKey == "FIX_DIGITS") s.tr("Fix: ¿Dígitos (0–9)?", "Fix: Digits (0–9)?")
+    else s.tr("Sci: ¿Dígitos (0–9)?", "Sci: Digits (0–9)?")
     else -> s.tr("Seleccionar opción", "Select Option")
   }
 
@@ -453,6 +476,7 @@ fun LcdModeBodyView(
   state: CalculatorUiState,
   palette: LcdPalette,
   onSelectSpreadsheetCell: (Int, Int) -> Unit,
+  onSpreadsheetInsert: (String) -> Unit,
 ) {
   when (state.mode) {
     CalcMode.TABLE -> TableLcdView(state, palette)
@@ -462,7 +486,7 @@ fun LcdModeBodyView(
     CalcMode.VECTOR -> VectorLcdView(state, palette)
     CalcMode.STATISTICS -> StatisticsLcdView(state, palette)
     CalcMode.DISTRIBUTION -> DistributionLcdView(state, palette)
-    CalcMode.SPREADSHEET -> SpreadsheetLcdView(state, palette, onSelectSpreadsheetCell)
+    CalcMode.SPREADSHEET -> SpreadsheetLcdView(state, palette, onSelectSpreadsheetCell, onSpreadsheetInsert)
     CalcMode.RATIO -> RatioLcdView(state, palette)
     CalcMode.MATH_BOX -> MathBoxLcdView(state, palette)
     else -> {}
@@ -486,10 +510,10 @@ private fun TableLcdView(state: CalculatorUiState, palette: LcdPalette) {
         )
         Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
           val doc = if (isF) ts.fDoc else ts.gDoc
-          NaturalMathRowView(doc.root, doc.cursor, emptyList(), palette, fontSize = 19.sp)
+          NaturalMathRowView(doc.root, doc.cursor, emptyList(), palette, fontSize = 19.sp, linearMode = s.isLinearInput)
         }
         Text(
-          text = s.tr("EXE: siguiente | TOOLS: Rango/Tabla", "EXE: next | TOOLS: Range/Table"),
+          text = s.tr("EXE: siguiente | TOOLS: Rango/Tipo", "EXE: next | TOOLS: Range/Type"),
           color = palette.inkDark,
           fontSize = 9.5.sp,
           fontFamily = IbmPlexSansFamily,
@@ -527,21 +551,34 @@ private fun TableLcdView(state: CalculatorUiState, palette: LcdPalette) {
         Row(modifier = Modifier.fillMaxWidth().background(palette.inkDarkest).padding(horizontal = 4.dp, vertical = 1.dp)) {
           Text("x", color = palette.background, fontSize = 10.sp, fontFamily = JetBrainsMonoFamily, modifier = Modifier.weight(1f))
           Text("f(x)", color = palette.background, fontSize = 10.sp, fontFamily = JetBrainsMonoFamily, modifier = Modifier.weight(1f))
-          Text("g(x)", color = palette.background, fontSize = 10.sp, fontFamily = JetBrainsMonoFamily, modifier = Modifier.weight(1f))
+          if (ts.showG) Text("g(x)", color = palette.background, fontSize = 10.sp, fontFamily = JetBrainsMonoFamily, modifier = Modifier.weight(1f))
         }
         Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
           LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxHeight()) {
             itemsIndexed(ts.rows) { rIdx, r ->
               val rowSel = rIdx == ts.selectedRow
+              val xEditing = ts.editingXRow == rIdx
               Row(
                 modifier = Modifier
                   .fillMaxWidth()
                   .background(if (rowSel) palette.backgroundShade else palette.background)
                   .padding(horizontal = 4.dp, vertical = 2.dp),
               ) {
-                Text(formatDoubleClassWiz(r.x, s), color = palette.inkDarkest, fontSize = 11.sp, fontFamily = JetBrainsMonoFamily, modifier = Modifier.weight(1f), maxLines = 1)
+                Text(
+                  text = if (xEditing) "${ts.editingXBuffer}|" else formatDoubleClassWiz(r.x, s),
+                  color = if (xEditing || (rowSel && ts.selectedCol == 0)) palette.background else palette.inkDarkest,
+                  fontSize = 11.sp,
+                  fontFamily = JetBrainsMonoFamily,
+                  modifier = Modifier
+                    .weight(1f)
+                    .background(if (xEditing || (rowSel && ts.selectedCol == 0)) palette.inkDark else Color.Transparent)
+                    .padding(horizontal = 2.dp),
+                  maxLines = 1,
+                )
                 Text(r.fx?.let { formatDoubleClassWiz(it, s) } ?: "—", color = palette.inkDarkest, fontSize = 11.sp, fontFamily = JetBrainsMonoFamily, modifier = Modifier.weight(1f), maxLines = 1)
-                Text(r.gx?.let { formatDoubleClassWiz(it, s) } ?: "—", color = palette.inkDarkest, fontSize = 11.sp, fontFamily = JetBrainsMonoFamily, modifier = Modifier.weight(1f), maxLines = 1)
+                if (ts.showG) {
+                  Text(r.gx?.let { formatDoubleClassWiz(it, s) } ?: "—", color = palette.inkDarkest, fontSize = 11.sp, fontFamily = JetBrainsMonoFamily, modifier = Modifier.weight(1f), maxLines = 1)
+                }
               }
             }
           }
@@ -731,27 +768,37 @@ private fun EquationLcdView(state: CalculatorUiState, palette: LcdPalette) {
       }
     }
     EquationState.SubType.POLY_RESULT -> {
-      val listState = rememberLcdListState("eq_poly_res", eq.activeRow, eq.polyRoots.size)
+      val rows = buildList<Pair<String, String>> {
+        eq.polyRoots.forEachIndexed { idx, root ->
+          val str = if (abs(root.im) < 1e-9) {
+            formatDoubleClassWiz(root.re, s)
+          } else {
+            val sign = if (root.im < 0) "-" else "+"
+            "${formatDoubleClassWiz(root.re, s)}$sign${formatDoubleClassWiz(abs(root.im), s)}i"
+          }
+          add("x${idx + 1}" to str)
+        }
+        eq.polyVertex?.let { v ->
+          val tag = if (v.isMinimum) s.tr("Mín", "Min") else s.tr("Máx", "Max")
+          add("$tag(x)" to formatDoubleClassWiz(v.x, s))
+          add("$tag(y)" to formatDoubleClassWiz(v.y, s))
+        }
+      }
+      val listState = rememberLcdListState("eq_poly_res", eq.activeRow, rows.size)
       Row(modifier = Modifier.fillMaxSize().padding(6.dp)) {
         LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxHeight()) {
-          itemsIndexed(eq.polyRoots) { idx, root ->
+          itemsIndexed(rows) { idx, (k, v) ->
             val sel = idx == eq.activeRow
-            val str = if (abs(root.im) < 1e-9) {
-              formatDoubleClassWiz(root.re, s)
-            } else {
-              val sign = if (root.im < 0) "-" else "+"
-              "${formatDoubleClassWiz(root.re, s)}$sign${formatDoubleClassWiz(abs(root.im), s)}i"
-            }
             Row(
               modifier = Modifier.fillMaxWidth().background(if (sel) palette.backgroundShade else palette.background).padding(horizontal = 6.dp, vertical = 2.dp),
               horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-              Text("x${idx + 1} =", color = palette.inkDarkest, fontSize = 13.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.Bold)
-              Text(str, color = palette.inkDarkest, fontSize = 13.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.Bold)
+              Text("$k =", color = palette.inkDarkest, fontSize = 12.5.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.Bold)
+              Text(v, color = palette.inkDarkest, fontSize = 12.5.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.Bold)
             }
           }
         }
-        LcdScrollbar(listState, eq.polyRoots.size, palette)
+        LcdScrollbar(listState, rows.size, palette)
       }
     }
     EquationState.SubType.SOLVER_EQ -> {
@@ -954,23 +1001,28 @@ private fun MatrixLcdView(state: CalculatorUiState, palette: LcdPalette) {
     }
     MatrixAppState.Phase.EDIT_GRID -> {
       val cur = ms.matrices[ms.editingMatrixName] ?: return
+      val listState = rememberLcdListState("mat_grid_${ms.editingMatrixName}", ms.editRow, cur.rows)
       Column(modifier = Modifier.fillMaxSize().padding(4.dp)) {
         Text("${ms.editingMatrixName} [${ms.editRow + 1},${ms.editCol + 1}] — EXE:${s.tr("Calcular", "Calc")}", color = palette.inkDark, fontSize = 9.5.sp, fontFamily = JetBrainsMonoFamily)
         Spacer(Modifier.height(2.dp))
-        for (r in 0 until cur.rows) {
-          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-            for (c in 0 until cur.cols) {
-              val active = r == ms.editRow && c == ms.editCol
-              val text = if (active && ms.inputBuffer.isNotEmpty()) "${ms.inputBuffer}|" else formatDoubleClassWiz(cur.data[r][c], s)
-              Box(
-                modifier = Modifier.weight(1f).background(if (active) palette.inkDarkest else palette.backgroundShade).border(0.6.dp, palette.inkMid).padding(2.dp),
-                contentAlignment = Alignment.CenterEnd,
-              ) {
-                Text(text, color = if (active) palette.background else palette.inkDarkest, fontSize = 10.5.sp, fontFamily = JetBrainsMonoFamily, maxLines = 1)
+        Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+          LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            items(cur.rows) { r ->
+              Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                for (c in 0 until cur.cols) {
+                  val active = r == ms.editRow && c == ms.editCol
+                  val text = if (active && ms.inputBuffer.isNotEmpty()) "${ms.inputBuffer}|" else formatDoubleClassWiz(cur.data[r][c], s)
+                  Box(
+                    modifier = Modifier.weight(1f).background(if (active) palette.inkDarkest else palette.backgroundShade).border(0.6.dp, palette.inkMid).padding(2.dp),
+                    contentAlignment = Alignment.CenterEnd,
+                  ) {
+                    Text(text, color = if (active) palette.background else palette.inkDarkest, fontSize = 10.5.sp, fontFamily = JetBrainsMonoFamily, maxLines = 1)
+                  }
+                }
               }
             }
           }
-          Spacer(Modifier.height(2.dp))
+          LcdScrollbar(listState, cur.rows, palette)
         }
       }
     }
@@ -1122,6 +1174,10 @@ private fun StatisticsLcdView(state: CalculatorUiState, palette: LcdPalette) {
         add("max(x)" to formatDoubleClassWiz(sum.maxX, s))
         if (st.model != StatModelType.ONE_VAR) {
           add("ȳ" to formatDoubleClassWiz(sum.meanY, s))
+          add("Σy" to formatDoubleClassWiz(sum.sumY, s))
+          add("Σy²" to formatDoubleClassWiz(sum.sumY2, s))
+          add("σy" to formatDoubleClassWiz(sum.sigmaY, s))
+          add("sy" to formatDoubleClassWiz(sum.sY, s))
           add("Σxy" to formatDoubleClassWiz(sum.sumXY, s))
           add("a" to formatDoubleClassWiz(sum.regA, s))
           add("b" to formatDoubleClassWiz(sum.regB, s))
@@ -1145,6 +1201,30 @@ private fun StatisticsLcdView(state: CalculatorUiState, palette: LcdPalette) {
           }
         }
         LcdScrollbar(listState, items.size, palette)
+      }
+    }
+    StatsAppState.Phase.STAT_CALC -> {
+      Column(modifier = Modifier.fillMaxSize().padding(horizontal = 5.dp, vertical = 3.dp), verticalArrangement = Arrangement.SpaceBetween) {
+        Row(
+          modifier = Modifier.fillMaxWidth().background(palette.inkDarkest).padding(horizontal = 6.dp, vertical = 1.5.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Text(s.tr("Cálculo Estadístico", "Stat Calculation"), color = palette.background, fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
+          Text("CATALOG: Var Est.", color = palette.backgroundShade, fontSize = 8.5.sp, fontFamily = JetBrainsMonoFamily)
+        }
+        Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.CenterStart) {
+          NaturalMathRowView(st.calcDoc.root, st.calcDoc.cursor, emptyList(), palette, fontSize = 18.sp, linearMode = s.isLinearInput)
+        }
+        Box(modifier = Modifier.fillMaxWidth().heightIn(min = 32.dp), contentAlignment = Alignment.BottomEnd) {
+          st.calcResult?.let { res ->
+            EvalResultDisplay(res, s, null, palette)
+          } ?: Text(
+            text = s.tr("Use CATALOG → Variables Est. y EXE", "Use CATALOG → Stat Vars & EXE"),
+            color = palette.inkMid,
+            fontSize = 9.sp,
+            fontFamily = IbmPlexSansFamily,
+          )
+        }
       }
     }
   }
@@ -1228,9 +1308,54 @@ private fun SpreadsheetLcdView(
   state: CalculatorUiState,
   palette: LcdPalette,
   onSelectCell: (Int, Int) -> Unit,
+  onInsertSymbol: (String) -> Unit,
 ) {
   val sh = state.spreadsheetState
   val s = state.settings
+
+  if (sh.subPhase != SpreadsheetState.SubPhase.GRID) {
+    val isFormula = sh.subPhase == SpreadsheetState.SubPhase.FILL_FORMULA
+    Column(modifier = Modifier.fillMaxSize().padding(5.dp), verticalArrangement = Arrangement.SpaceBetween) {
+      Row(modifier = Modifier.fillMaxWidth().background(palette.inkDarkest).padding(horizontal = 6.dp, vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(
+          if (isFormula) s.tr("Rellenar fórmula", "Fill Formula") else s.tr("Rellenar valor", "Fill Value"),
+          color = palette.background, fontSize = 10.sp, fontWeight = FontWeight.Bold
+        )
+        Text("EXE:${s.tr("Aplicar", "Apply")}", color = palette.backgroundShade, fontSize = 9.sp)
+      }
+      Row(
+        modifier = Modifier.fillMaxWidth().background(if (sh.fillField == 0) palette.inkDark else palette.backgroundShade).padding(horizontal = 6.dp, vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Text(if (isFormula) s.tr("Fórmula:", "Formula:") else s.tr("Valor:", "Value:"), color = if (sh.fillField == 0) palette.background else palette.inkDarkest, fontSize = 11.sp)
+        Text(sh.fillSourceRaw + if (sh.fillField == 0) "|" else "", color = if (sh.fillField == 0) palette.background else palette.inkDarkest, fontSize = 11.sp, fontFamily = JetBrainsMonoFamily)
+      }
+      Row(
+        modifier = Modifier.fillMaxWidth().background(if (sh.fillField == 1) palette.inkDark else palette.backgroundShade).padding(horizontal = 6.dp, vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Text(s.tr("Rango:", "Range:"), color = if (sh.fillField == 1) palette.background else palette.inkDarkest, fontSize = 11.sp)
+        Text(sh.fillRange + if (sh.fillField == 1) "|" else "", color = if (sh.fillField == 1) palette.background else palette.inkDarkest, fontSize = 11.sp, fontFamily = JetBrainsMonoFamily)
+      }
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        listOf("A", "B", "C", "D", "E", ":", "$").forEach { sym ->
+          Box(
+            modifier = Modifier
+              .weight(1f)
+              .background(palette.backgroundShade)
+              .border(0.6.dp, palette.inkDark)
+              .clickable { onInsertSymbol(sym) }
+              .padding(vertical = 2.dp),
+            contentAlignment = Alignment.Center,
+          ) {
+            Text(sym, color = palette.inkDarkest, fontSize = 9.5.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.Bold)
+          }
+        }
+      }
+    }
+    return
+  }
+
   val activeName = sh.cellName()
   val formulaBar = if (sh.editing) "${sh.editBuffer}|" else (sh.cells[activeName] ?: "")
   Column(modifier = Modifier.fillMaxSize().padding(3.dp)) {
@@ -1238,8 +1363,23 @@ private fun SpreadsheetLcdView(
       modifier = Modifier.fillMaxWidth().background(palette.inkDarkest).padding(horizontal = 5.dp, vertical = 1.5.dp),
       horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-      Text("$activeName: $formulaBar", color = palette.background, fontSize = 10.sp, fontFamily = JetBrainsMonoFamily, maxLines = 1)
-      Text("OK:${s.tr("Editar", "Edit")}", color = palette.backgroundShade, fontSize = 9.sp)
+      Text("$activeName: $formulaBar", color = palette.background, fontSize = 10.sp, fontFamily = JetBrainsMonoFamily, maxLines = 1, modifier = Modifier.weight(1f))
+      Text(if (sh.editing) "EXE:OK" else "OK:${s.tr("Editar", "Edit")}", color = palette.backgroundShade, fontSize = 9.sp)
+    }
+    if (sh.editing) {
+      Row(modifier = Modifier.fillMaxWidth().padding(vertical = 1.5.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        listOf("A", "B", "C", "D", "E", ":", "$", "=SUM(").forEach { sym ->
+          Box(
+            modifier = Modifier
+              .background(palette.backgroundShade)
+              .border(0.6.dp, palette.inkDark)
+              .clickable { onInsertSymbol(sym) }
+              .padding(horizontal = 4.dp, vertical = 1.dp),
+          ) {
+            Text(sym, color = palette.inkDarkest, fontSize = 8.5.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.Bold)
+          }
+        }
+      }
     }
     Row(modifier = Modifier.fillMaxWidth().background(palette.backgroundShade)) {
       Text("", modifier = Modifier.width(18.dp), fontSize = 9.sp)
@@ -1247,8 +1387,8 @@ private fun SpreadsheetLcdView(
         Text("${'A' + c}", color = palette.inkDarkest, fontSize = 9.5.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
       }
     }
-    val startRow = (sh.activeRow - 2).coerceIn(0, 10)
-    for (r in startRow until (startRow + 5).coerceAtMost(15)) {
+    val startRow = (sh.activeRow - 2).coerceIn(0, 40)
+    for (r in startRow until (startRow + 5).coerceAtMost(45)) {
       Row(modifier = Modifier.fillMaxWidth().weight(1f), verticalAlignment = Alignment.CenterVertically) {
         Text("${r + 1}", color = palette.inkDark, fontSize = 9.5.sp, fontFamily = JetBrainsMonoFamily, textAlign = TextAlign.Center, modifier = Modifier.width(18.dp))
         for (c in 0..4) {
@@ -1320,140 +1460,6 @@ private fun RatioLcdView(state: CalculatorUiState, palette: LcdPalette) {
         Text("X =", color = palette.inkDark, fontSize = 12.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.Bold)
         rs.solution?.let { ExactRealView(it, s, ResultFormatMode.STANDARD, palette) }
       }
-    }
-  }
-}
-
-@Composable
-private fun MathBoxLcdView(state: CalculatorUiState, palette: LcdPalette) {
-  val mb = state.mathBoxState
-  val s = state.settings
-  when (mb.phase) {
-    MathBoxState.Phase.SELECT_TYPE -> {
-      Column(modifier = Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.Center) {
-        Text(s.tr("Caja Matemática:", "Math Box:"), color = palette.inkDark, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(4.dp))
-        MathBoxType.entries.forEachIndexed { idx, t ->
-          val sel = t == mb.type
-          Box(modifier = Modifier.fillMaxWidth().background(if (sel) palette.inkDark else palette.background).padding(5.dp)) {
-            Text("${idx + 1}. ${s.tr(t.labelEs, t.labelEn)}", color = if (sel) palette.background else palette.inkDarkest, fontSize = 12.5.sp)
-          }
-        }
-      }
-    }
-    MathBoxState.Phase.PARAMS -> {
-      Column(modifier = Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.Center) {
-        Text(s.tr(mb.type.labelEs, mb.type.labelEn), color = palette.inkDarkest, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(6.dp))
-        val cText = if (mb.activeParam == 0 && mb.inputBuffer.isNotEmpty()) "${mb.inputBuffer}|" else "${mb.objectCount}"
-        val tText = if (mb.activeParam == 1 && mb.inputBuffer.isNotEmpty()) "${mb.inputBuffer}|" else "${mb.trials}"
-        Row(modifier = Modifier.fillMaxWidth().background(if (mb.activeParam == 0) palette.inkDarkest else palette.backgroundShade).padding(5.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-          Text(if (mb.type == MathBoxType.DICE) s.tr("Dados (1-3):", "Dice (1-3):") else s.tr("Monedas (1-3):", "Coins (1-3):"), color = if (mb.activeParam == 0) palette.background else palette.inkDarkest, fontSize = 11.5.sp)
-          Text(cText, color = if (mb.activeParam == 0) palette.background else palette.inkDarkest, fontSize = 12.sp, fontFamily = JetBrainsMonoFamily)
-        }
-        Spacer(Modifier.height(3.dp))
-        Row(modifier = Modifier.fillMaxWidth().background(if (mb.activeParam == 1) palette.inkDarkest else palette.backgroundShade).padding(5.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-          Text(s.tr("Intentos (1-250):", "Trials (1-250):"), color = if (mb.activeParam == 1) palette.background else palette.inkDarkest, fontSize = 11.5.sp)
-          Text(tText, color = if (mb.activeParam == 1) palette.background else palette.inkDarkest, fontSize = 12.sp, fontFamily = JetBrainsMonoFamily)
-        }
-      }
-    }
-    MathBoxState.Phase.RESULTS -> {
-      val maxCount = mb.counts.values.maxOrNull()?.coerceAtLeast(1) ?: 1
-      Column(modifier = Modifier.fillMaxSize().padding(4.dp)) {
-        Text("${s.tr("Total", "Total")}: ${mb.trials} — EXE:${s.tr("Repetir", "Retry")}", color = palette.inkDark, fontSize = 9.5.sp, fontFamily = JetBrainsMonoFamily)
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-          itemsIndexed(mb.counts.entries.toList()) { _, (sum, cnt) ->
-            val pct = (cnt * 100.0) / mb.trials
-            val label = if (mb.type == MathBoxType.COIN) "${sum}C" else "$sum"
-            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp), verticalAlignment = Alignment.CenterVertically) {
-              Text(label, color = palette.inkDarkest, fontSize = 10.sp, fontFamily = JetBrainsMonoFamily, modifier = Modifier.width(28.dp))
-              Box(modifier = Modifier.weight(1f).height(8.dp).background(palette.backgroundShade)) {
-                Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(cnt.toFloat() / maxCount).background(palette.inkDarkest))
-              }
-              Spacer(Modifier.width(4.dp))
-              Text("$cnt (${pct.toInt()}%)", color = palette.inkDarkest, fontSize = 9.5.sp, fontFamily = JetBrainsMonoFamily, modifier = Modifier.width(64.dp), textAlign = TextAlign.End)
-            }
-          }
-        }
-      }
-    }
-  }
-}
-
-@Composable
-fun LcdQrView(state: CalculatorUiState, palette: LcdPalette) {
-  val s = state.settings
-  val matrix = state.qrMatrix
-  Row(
-    modifier = Modifier
-      .fillMaxSize()
-      .padding(horizontal = 6.dp, vertical = 4.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
-  ) {
-    // Crisp monochrome QR matrix with quiet zone
-    Box(
-      modifier = Modifier
-        .size(104.dp)
-        .background(Color.White)
-        .border(1.dp, palette.inkDarkest)
-        .padding(4.dp)
-        .testTag("qr_code_matrix"),
-    ) {
-      Canvas(modifier = Modifier.fillMaxSize()) {
-        val n = matrix.size
-        if (n > 0) {
-          val cellW = size.width / n
-          val cellH = size.height / n
-          for (r in 0 until n) {
-            for (c in 0 until n) {
-              if (matrix[r][c]) {
-                drawRect(
-                  color = Color.Black,
-                  topLeft = Offset(c * cellW, r * cellH),
-                  size = Size(cellW + 0.5f, cellH + 0.5f),
-                )
-              }
-            }
-          }
-        }
-      }
-    }
-
-    Column(
-      modifier = Modifier
-        .weight(1f)
-        .fillMaxHeight(),
-      verticalArrangement = Arrangement.SpaceBetween,
-    ) {
-      Column {
-        Text(
-          text = state.qrTitle,
-          color = palette.inkDarkest,
-          fontSize = 11.sp,
-          fontFamily = IbmPlexSansFamily,
-          fontWeight = FontWeight.Bold,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.height(3.dp))
-        Text(
-          text = state.qrSubtitle,
-          color = palette.inkDark,
-          fontSize = 9.5.sp,
-          fontFamily = JetBrainsMonoFamily,
-          maxLines = 4,
-          overflow = TextOverflow.Ellipsis,
-        )
-      }
-      Text(
-        text = s.tr("OK / BACK: Cerrar", "OK / BACK: Close"),
-        color = palette.inkDarkest,
-        fontSize = 9.5.sp,
-        fontFamily = IbmPlexSansFamily,
-        fontWeight = FontWeight.SemiBold,
-      )
     }
   }
 }

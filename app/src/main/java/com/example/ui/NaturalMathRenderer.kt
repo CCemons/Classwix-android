@@ -62,6 +62,7 @@ fun NaturalMathRowView(
   palette: LcdPalette,
   fontSize: TextUnit = 19.sp,
   showEmptyPlaceholder: Boolean = false,
+  linearMode: Boolean = false,
   modifier: Modifier = Modifier,
 ) {
   val isActiveRow = cursor != null && cursor.steps == currentSteps
@@ -98,17 +99,93 @@ fun NaturalMathRowView(
       if (isActiveRow && cursor?.index == idx) {
         BlinkingCursor(palette.inkDarkest, heightDp = (fontSize.value * 1.05f).roundToInt())
       }
-      NaturalElementView(
-        element = element,
-        cursor = cursor,
-        elementPath = currentSteps,
-        elementIdx = idx,
-        palette = palette,
-        fontSize = fontSize,
-      )
+      if (linearMode) {
+        LinearElementView(
+          element = element,
+          cursor = cursor,
+          elementPath = currentSteps,
+          elementIdx = idx,
+          palette = palette,
+          fontSize = fontSize,
+        )
+      } else {
+        NaturalElementView(
+          element = element,
+          cursor = cursor,
+          elementPath = currentSteps,
+          elementIdx = idx,
+          palette = palette,
+          fontSize = fontSize,
+        )
+      }
     }
     if (isActiveRow && cursor?.index == row.items.size) {
       BlinkingCursor(palette.inkDarkest, heightDp = (fontSize.value * 1.05f).roundToInt())
+    }
+  }
+}
+
+@Composable
+private fun LinearElementView(
+  element: MathElement,
+  cursor: CursorPath?,
+  elementPath: List<PathStep>,
+  elementIdx: Int,
+  palette: LcdPalette,
+  fontSize: TextUnit,
+) {
+  val f = fontSize
+  @Composable
+  fun LinearSlot(row: MathRow, slotIdx: Int) {
+    NaturalMathRowView(
+      row = row,
+      cursor = cursor,
+      currentSteps = elementPath + PathStep(elementIdx, slotIdx),
+      palette = palette,
+      fontSize = f,
+      showEmptyPlaceholder = true,
+      linearMode = true,
+    )
+  }
+  @Composable
+  fun LinText(s: String) {
+    Text(s, color = palette.inkDarkest, fontSize = f, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.Medium, maxLines = 1)
+  }
+
+  when (element) {
+    is MathElement.Token -> LinText(element.text)
+    is MathElement.Fraction -> Row(verticalAlignment = Alignment.CenterVertically) {
+      LinearSlot(element.numerator, 0); LinText("⌟"); LinearSlot(element.denominator, 1)
+    }
+    is MathElement.MixedFraction -> Row(verticalAlignment = Alignment.CenterVertically) {
+      LinearSlot(element.whole, 0); LinText("⌟"); LinearSlot(element.numerator, 1); LinText("⌟"); LinearSlot(element.denominator, 2)
+    }
+    is MathElement.Superscript -> Row(verticalAlignment = Alignment.CenterVertically) {
+      LinText("^("); LinearSlot(element.exponent, 0); LinText(")")
+    }
+    is MathElement.Sqrt -> Row(verticalAlignment = Alignment.CenterVertically) {
+      LinText("√("); LinearSlot(element.radicand, 0); LinText(")")
+    }
+    is MathElement.NthRoot -> Row(verticalAlignment = Alignment.CenterVertically) {
+      LinearSlot(element.index, 0); LinText("ˣ√("); LinearSlot(element.radicand, 1); LinText(")")
+    }
+    is MathElement.LogBase -> Row(verticalAlignment = Alignment.CenterVertically) {
+      LinText("log("); LinearSlot(element.base, 0); LinText(","); LinearSlot(element.argument, 1); LinText(")")
+    }
+    is MathElement.AbsBox -> Row(verticalAlignment = Alignment.CenterVertically) {
+      LinText("Abs("); LinearSlot(element.inner, 0); LinText(")")
+    }
+    is MathElement.Integral -> Row(verticalAlignment = Alignment.CenterVertically) {
+      LinText("∫("); LinearSlot(element.integrand, 0); LinText(","); LinearSlot(element.lower, 1); LinText(","); LinearSlot(element.upper, 2); LinText(")")
+    }
+    is MathElement.Derivative -> Row(verticalAlignment = Alignment.CenterVertically) {
+      LinText("d/dx("); LinearSlot(element.expr, 0); LinText(","); LinearSlot(element.atValue, 1); LinText(")")
+    }
+    is MathElement.Summation -> Row(verticalAlignment = Alignment.CenterVertically) {
+      LinText("Σ("); LinearSlot(element.expr, 2); LinText(","); LinearSlot(element.lower, 0); LinText(","); LinearSlot(element.upper, 1); LinText(")")
+    }
+    is MathElement.ProductOp -> Row(verticalAlignment = Alignment.CenterVertically) {
+      LinText("Π("); LinearSlot(element.expr, 2); LinText(","); LinearSlot(element.lower, 0); LinText(","); LinearSlot(element.upper, 1); LinText(")")
     }
   }
 }
@@ -141,7 +218,7 @@ private fun NaturalElementView(
     is MathElement.Fraction -> {
       Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.padding(horizontal = 2.dp),
+        modifier = Modifier.width(IntrinsicSize.Max).padding(horizontal = 2.dp),
       ) {
         NaturalMathRowView(
           row = element.numerator,
@@ -155,12 +232,10 @@ private fun NaturalElementView(
           modifier = Modifier
             .padding(vertical = 1.5.dp)
             .widthIn(min = 16.dp)
+            .fillMaxWidth()
             .height(1.4.dp)
             .background(palette.inkDarkest)
-        ) {
-          // Intrinsic width stretcher via invisible spacer? Use IntrinsicSize.Max on parent Column!
-          Spacer(modifier = Modifier.width(18.dp))
-        }
+        )
         NaturalMathRowView(
           row = element.denominator,
           cursor = cursor,
@@ -183,7 +258,10 @@ private fun NaturalElementView(
           showEmptyPlaceholder = true,
         )
         Spacer(Modifier.width(2.dp))
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+          horizontalAlignment = Alignment.CenterHorizontally,
+          modifier = Modifier.width(IntrinsicSize.Max),
+        ) {
           NaturalMathRowView(
             row = element.numerator,
             cursor = cursor,
@@ -195,7 +273,8 @@ private fun NaturalElementView(
           Box(
             modifier = Modifier
               .padding(vertical = 1.dp)
-              .width(18.dp)
+              .widthIn(min = 16.dp)
+              .fillMaxWidth()
               .height(1.4.dp)
               .background(palette.inkDarkest)
           )
@@ -501,11 +580,34 @@ fun EvalResultDisplay(
         Column(horizontalAlignment = Alignment.End) {
           Text(verdict, color = palette.inkDarkest, fontSize = 17.sp, fontWeight = FontWeight.Bold, fontFamily = JetBrainsMonoFamily)
           Text(
-            "${result.lhsSummary} ${if (result.isTrue) "≈" else "≠"} ${result.rhsSummary}",
+            "${result.lhsSummary} [${result.relationOp}] ${result.rhsSummary}",
             color = palette.inkDark,
             fontSize = 10.sp,
             fontFamily = JetBrainsMonoFamily,
           )
+        }
+      }
+      is EvalResult.UnreducedFraction -> {
+        val neg = result.num < BigInteger.ZERO
+        val absN = result.num.abs()
+        val factorTxt = result.lastDivisor?.let { "÷$it  " } ?: "÷?  "
+        if (effectiveFormat == ResultFormatMode.DECIMAL) {
+          val dec = result.num.toDouble() / result.den.toDouble()
+          Text(formatDoubleClassWiz(dec, settings), color = palette.inkDarkest, fontSize = 21.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.SemiBold)
+        } else if (settings.inputOutput == InputOutputMode.LINE_LINE) {
+          Text(
+            "$factorTxt${result.num}⌟${result.den}",
+            color = palette.inkDarkest,
+            fontSize = 19.sp,
+            fontFamily = JetBrainsMonoFamily,
+            fontWeight = FontWeight.SemiBold,
+          )
+        } else {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(factorTxt, color = palette.inkDark, fontSize = 10.5.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.Bold)
+            if (neg) Text("-", color = palette.inkDarkest, fontSize = 19.sp, fontFamily = JetBrainsMonoFamily)
+            StackedNumDen(absN.toString(), result.den.toString(), palette)
+          }
         }
       }
       is EvalResult.PolarPoint -> {
@@ -587,6 +689,15 @@ fun EvalResultDisplay(
           }
         }
       }
+      is EvalResult.RemainderResult -> {
+        Text(
+          text = "${result.quotient}, R=${result.remainder}",
+          color = palette.inkDarkest,
+          fontSize = 20.sp,
+          fontFamily = JetBrainsMonoFamily,
+          fontWeight = FontWeight.SemiBold,
+        )
+      }
       is EvalResult.RealResult -> {
         ExactRealView(result.value, settings, effectiveFormat, palette)
       }
@@ -632,6 +743,20 @@ fun ExactRealView(
     else -> settings.fractionFormat
   }
 
+  // Linear Output (LinS / LineO) renders ⌟ fractions when not forced to Decimal
+  if (settings.inputOutput == InputOutputMode.LINE_LINE &&
+    format in setOf(ResultFormatMode.STANDARD, ResultFormatMode.MIXED_FRACTION, ResultFormatMode.IMPROPER_FRACTION)
+  ) {
+    Text(
+      text = formatExactRealLinear(value, settings, fracFmt),
+      color = palette.inkDarkest,
+      fontSize = 20.sp,
+      fontFamily = JetBrainsMonoFamily,
+      fontWeight = FontWeight.SemiBold,
+    )
+    return
+  }
+
   when (value) {
     is ExactReal.Approx -> {
       Text(
@@ -647,14 +772,10 @@ fun ExactRealView(
       if (r != null && !r.isInteger) {
         val neg = r.isNegative
         val absN = r.num.abs()
-        val numText = if (absN == BigInteger.ONE) "π" else "${absN}π"
+        val numText = if (absN == BigInteger.ONE) "π" else "${applyDigitGrouping(absN.toString(), settings.digitSeparator)}π"
         Row(verticalAlignment = Alignment.CenterVertically) {
           if (neg) Text("-", color = palette.inkDarkest, fontSize = 19.sp, fontFamily = JetBrainsMonoFamily)
-          Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(numText, color = palette.inkDarkest, fontSize = 15.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.SemiBold)
-            Box(Modifier.widthIn(min = 18.dp).width((max(numText.length, r.den.toString().length) * 10).dp).height(1.5.dp).background(palette.inkDarkest))
-            Text(r.den.toString(), color = palette.inkDarkest, fontSize = 15.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.SemiBold)
-          }
+          StackedNumDen(numText, applyDigitGrouping(r.den.toString(), settings.digitSeparator), palette)
         }
       } else {
         val str = if (r != null) {
@@ -662,7 +783,7 @@ fun ExactRealView(
             BigInteger.ONE -> "π"
             BigInteger.valueOf(-1L) -> "-π"
             BigInteger.ZERO -> "0"
-            else -> "${r.num}π"
+            else -> "${applyDigitGrouping(r.num.toString(), settings.digitSeparator)}π"
           }
         } else "${value.coeff.formatLatexLike(fracFmt)}π"
         Text(str, color = palette.inkDarkest, fontSize = 21.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.SemiBold)
@@ -672,7 +793,13 @@ fun ExactRealView(
       val r = value.value.asRationalOrNull()
       if (r != null) {
         if (r.isInteger) {
-          Text(r.num.toString(), color = palette.inkDarkest, fontSize = 21.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.SemiBold)
+          Text(
+            applyDigitGrouping(r.num.toString(), settings.digitSeparator),
+            color = palette.inkDarkest,
+            fontSize = 21.sp,
+            fontFamily = JetBrainsMonoFamily,
+            fontWeight = FontWeight.SemiBold,
+          )
         } else {
           val neg = r.isNegative
           val absN = r.num.abs()
@@ -681,7 +808,7 @@ fun ExactRealView(
             val rem = absN % r.den
             Row(verticalAlignment = Alignment.CenterVertically) {
               if (neg) Text("-", color = palette.inkDarkest, fontSize = 19.sp, fontFamily = JetBrainsMonoFamily)
-              Text(whole.toString(), color = palette.inkDarkest, fontSize = 20.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.SemiBold)
+              Text(applyDigitGrouping(whole.toString(), settings.digitSeparator), color = palette.inkDarkest, fontSize = 20.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.SemiBold)
               Spacer(Modifier.width(3.dp))
               StackedNumDen(rem.toString(), r.den.toString(), palette)
             }
@@ -693,7 +820,6 @@ fun ExactRealView(
           }
         }
       } else {
-        // Surd combination! Render fraction bar if common denominator > 1
         val str = value.value.formatLatexLike(fracFmt)
         if (str.startsWith("(") && str.contains(")/")) {
           val num = str.substringAfter("(").substringBefore(")/")
@@ -722,10 +848,12 @@ fun ExactRealView(
 
 @Composable
 private fun StackedNumDen(num: String, den: String, palette: LcdPalette) {
-  val widthDp = (max(num.length, den.length) * 10).coerceAtLeast(18).dp
-  Column(horizontalAlignment = Alignment.CenterHorizontally) {
+  Column(
+    horizontalAlignment = Alignment.CenterHorizontally,
+    modifier = Modifier.width(IntrinsicSize.Max),
+  ) {
     Text(num, color = palette.inkDarkest, fontSize = 15.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.SemiBold)
-    Box(Modifier.padding(vertical = 1.dp).width(widthDp).height(1.5.dp).background(palette.inkDarkest))
+    Box(Modifier.padding(vertical = 1.dp).widthIn(min = 18.dp).fillMaxWidth().height(1.5.dp).background(palette.inkDarkest))
     Text(den, color = palette.inkDarkest, fontSize = 15.sp, fontFamily = JetBrainsMonoFamily, fontWeight = FontWeight.SemiBold)
   }
 }

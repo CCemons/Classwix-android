@@ -30,6 +30,10 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
     val FRAC_FMT = stringPreferencesKey("frac_fmt")
     val CPLX_FMT = stringPreferencesKey("cplx_fmt")
     val STAT_FREQ = booleanPreferencesKey("stat_freq")
+    val DIGIT_SEP = booleanPreferencesKey("digit_sep")
+    val SIMPLIFY_MODE = stringPreferencesKey("simplify_mode")
+    val QR_VERSION = stringPreferencesKey("qr_version")
+    val AUTO_POWER_OFF = stringPreferencesKey("auto_power_off")
     val CONTRAST = floatPreferencesKey("lcd_contrast")
     val LCD_THEME = stringPreferencesKey("lcd_theme")
     val LANGUAGE = stringPreferencesKey("calc_lang")
@@ -48,6 +52,10 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
         fractionFormat = prefs[PrefKeys.FRAC_FMT]?.let { runCatching { FractionFormat.valueOf(it) }.getOrNull() } ?: FractionFormat.IMPROPER,
         complexFormat = prefs[PrefKeys.CPLX_FMT]?.let { runCatching { ComplexFormat.valueOf(it) }.getOrNull() } ?: ComplexFormat.RECTANGULAR,
         statFrequency = prefs[PrefKeys.STAT_FREQ] ?: false,
+        digitSeparator = prefs[PrefKeys.DIGIT_SEP] ?: false,
+        simplifyMode = prefs[PrefKeys.SIMPLIFY_MODE]?.let { runCatching { SimplifyMode.valueOf(it) }.getOrNull() } ?: SimplifyMode.AUTO,
+        qrVersion = prefs[PrefKeys.QR_VERSION]?.let { runCatching { QrVersion.valueOf(it) }.getOrNull() } ?: QrVersion.V11,
+        autoPowerOff = prefs[PrefKeys.AUTO_POWER_OFF]?.let { runCatching { AutoPowerOff.valueOf(it) }.getOrNull() } ?: AutoPowerOff.MIN_10,
         lcdContrast = prefs[PrefKeys.CONTRAST] ?: 0.85f,
         lcdTheme = prefs[PrefKeys.LCD_THEME]?.let { runCatching { LcdThemeMode.valueOf(it) }.getOrNull() } ?: LcdThemeMode.CLASSIC,
         language = prefs[PrefKeys.LANGUAGE]?.let { runCatching { CalcLanguage.valueOf(it) }.getOrNull() } ?: CalcLanguage.ES,
@@ -68,6 +76,10 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
         p[PrefKeys.FRAC_FMT] = s.fractionFormat.name
         p[PrefKeys.CPLX_FMT] = s.complexFormat.name
         p[PrefKeys.STAT_FREQ] = s.statFrequency
+        p[PrefKeys.DIGIT_SEP] = s.digitSeparator
+        p[PrefKeys.SIMPLIFY_MODE] = s.simplifyMode.name
+        p[PrefKeys.QR_VERSION] = s.qrVersion.name
+        p[PrefKeys.AUTO_POWER_OFF] = s.autoPowerOff.name
         p[PrefKeys.CONTRAST] = s.lcdContrast
         p[PrefKeys.LCD_THEME] = s.lcdTheme.name
         p[PrefKeys.LANGUAGE] = s.language.name
@@ -106,9 +118,39 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
   }
 
   fun selectSpreadsheetCell(col: Int, row: Int) {
+    val safeCol = col.coerceIn(0, 4)
+    val safeRow = row.coerceIn(0, 44)
+    val ref = "${'A' + safeCol}${safeRow + 1}"
     _uiState.update { cur ->
-      if (cur.mode != CalcMode.SPREADSHEET) cur
-      else cur.copy(spreadsheetState = cur.spreadsheetState.copy(activeCol = col.coerceIn(0, 4), activeRow = row.coerceIn(0, 14)))
+      if (cur.mode != CalcMode.SPREADSHEET) return@update cur
+      val sh = cur.spreadsheetState
+      when {
+        sh.subPhase != SpreadsheetState.SubPhase.GRID -> {
+          if (sh.fillField == 0) cur.copy(spreadsheetState = sh.copy(fillSourceRaw = sh.fillSourceRaw + ref))
+          else cur.copy(spreadsheetState = sh.copy(fillRange = if (sh.fillRange.contains(":")) "$ref:" else sh.fillRange + ref))
+        }
+        sh.editing && sh.editBuffer.startsWith("=") -> {
+          cur.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + ref))
+        }
+        else -> {
+          cur.copy(spreadsheetState = sh.copy(activeCol = safeCol, activeRow = safeRow))
+        }
+      }
+    }
+  }
+
+  fun insertSpreadsheetSymbol(token: String) {
+    _uiState.update { cur ->
+      if (cur.mode != CalcMode.SPREADSHEET) return@update cur
+      val sh = cur.spreadsheetState
+      when {
+        sh.subPhase != SpreadsheetState.SubPhase.GRID -> {
+          if (sh.fillField == 0) cur.copy(spreadsheetState = sh.copy(fillSourceRaw = sh.fillSourceRaw + token))
+          else cur.copy(spreadsheetState = sh.copy(fillRange = sh.fillRange + token))
+        }
+        sh.editing -> cur.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + token))
+        else -> cur.copy(spreadsheetState = sh.copy(editing = true, editBuffer = token))
+      }
     }
   }
 
@@ -398,7 +440,20 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
       action == "tool:table_f" -> state.copy(tableState = state.tableState.copy(phase = TableState.Phase.EDIT_F))
       action == "tool:table_g" -> state.copy(tableState = state.tableState.copy(phase = TableState.Phase.EDIT_G))
       action == "tool:table_range" -> state.copy(tableState = state.tableState.copy(phase = TableState.Phase.RANGE_SETUP, selectedRow = 0))
+      action == "tool:table_type" -> {
+        val nextShowG = !state.tableState.showG
+        val msg = if (nextShowG) "f(x), g(x)" else "f(x)"
+        val nextPhase = if (!nextShowG && state.tableState.phase == TableState.Phase.EDIT_G) TableState.Phase.EDIT_F else state.tableState.phase
+        state.copy(tableState = state.tableState.copy(showG = nextShowG, phase = nextPhase), toastBanner = msg)
+      }
       action == "tool:table_exec" -> ModeKeyHandler.generateTable(state)
+      action == "tool:stat_calc" -> {
+        val summary = AdvancedMathSolvers.computeStatistics(
+          state.statsState.model, state.statsState.xValues, state.statsState.yValues,
+          if (state.settings.statFrequency) state.statsState.freqValues else List(state.statsState.xValues.size) { 1.0 }
+        )
+        state.copy(statsState = state.statsState.copy(phase = StatsAppState.Phase.STAT_CALC, summary = summary))
+      }
       action == "tool:stat_results" -> {
         val summary = AdvancedMathSolvers.computeStatistics(
           state.statsState.model, state.statsState.xValues, state.statsState.yValues,
@@ -419,17 +474,119 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
       action == "tool:eq_solver" -> state.copy(
         equationState = state.equationState.copy(subType = EquationState.SubType.SOLVER_EQ, activeRow = 2, inputBuffer = "")
       )
-      action == "tool:sheet_sum" || action == "tool:sheet_mean" -> {
-        val formula = if (action == "tool:sheet_sum") "=SUM(A1:A5)" else "=MEAN(A1:A5)"
+      action.startsWith("sheet:ins:") -> {
+        val tok = action.removePrefix("sheet:ins:")
+        val sh = state.spreadsheetState
+        if (sh.subPhase != SpreadsheetState.SubPhase.GRID) {
+          if (sh.fillField == 0) state.copy(spreadsheetState = sh.copy(fillSourceRaw = sh.fillSourceRaw + tok))
+          else state.copy(spreadsheetState = sh.copy(fillRange = sh.fillRange + tok))
+        } else {
+          val buf = if (sh.editing) sh.editBuffer + tok else tok
+          state.copy(spreadsheetState = sh.copy(editing = true, editBuffer = buf))
+        }
+      }
+      action == "tool:sheet_cut" || action == "tool:sheet_copy" -> {
+        val sh = state.spreadsheetState
+        val name = sh.cellName()
+        val raw = sh.cells[name] ?: ""
+        val isCut = action == "tool:sheet_cut"
+        state.copy(
+          spreadsheetState = sh.copy(
+            clipboardRaw = raw,
+            clipboardSourceCol = sh.activeCol,
+            clipboardSourceRow = sh.activeRow,
+            clipboardIsCut = isCut,
+          ),
+          toastBanner = if (isCut) state.settings.tr("Cortado $name", "Cut $name") else state.settings.tr("Copiado $name", "Copied $name"),
+        )
+      }
+      action == "tool:sheet_paste" -> {
+        val sh = state.spreadsheetState
+        val clip = sh.clipboardRaw ?: return state
+        val targetName = sh.cellName()
+        val sourceName = sh.cellName(sh.clipboardSourceCol, sh.clipboardSourceRow)
+        val pastedVal = if (clip.startsWith("=")) {
+          AdvancedMathSolvers.shiftFormulaReferences(
+            clip,
+            sh.activeCol - sh.clipboardSourceCol,
+            sh.activeRow - sh.clipboardSourceRow
+          )
+        } else clip
+        val withoutSource = if (sh.clipboardIsCut && sourceName != targetName) sh.cells - sourceName else sh.cells
+        val newCells = if (pastedVal.isEmpty()) withoutSource - targetName else withoutSource + (targetName to pastedVal)
+        state.copy(
+          spreadsheetState = sh.copy(
+            cells = newCells,
+            evaluated = AdvancedMathSolvers.evaluateSpreadsheet(newCells),
+            clipboardIsCut = false,
+          )
+        )
+      }
+      action == "tool:sheet_fill_formula" || action == "tool:sheet_fill_value" -> {
+        val sh = state.spreadsheetState
+        val isFormula = action == "tool:sheet_fill_formula"
+        val cur = sh.cells[sh.cellName()] ?: if (isFormula) "=" else "0"
+        val endRow = (sh.activeRow + 4).coerceAtMost(44) + 1
+        val colCh = 'A' + sh.activeCol
+        state.copy(
+          spreadsheetState = sh.copy(
+            subPhase = if (isFormula) SpreadsheetState.SubPhase.FILL_FORMULA else SpreadsheetState.SubPhase.FILL_VALUE,
+            fillSourceRaw = cur,
+            fillRange = "${sh.cellName()}:$colCh$endRow",
+            fillField = 0,
+          )
+        )
+      }
+      action == "tool:sheet_sum" || action == "tool:sheet_mean" || action == "tool:sheet_min" || action == "tool:sheet_max" -> {
+        val fn = when (action) {
+          "tool:sheet_sum" -> "SUM"
+          "tool:sheet_mean" -> "MEAN"
+          "tool:sheet_min" -> "MIN"
+          else -> "MAX"
+        }
+        val formula = "=$fn(A1:A5)"
         val sh = state.spreadsheetState
         val newCells = sh.cells + (sh.cellName() to formula)
         state.copy(spreadsheetState = sh.copy(cells = newCells, evaluated = AdvancedMathSolvers.evaluateSpreadsheet(newCells)))
       }
       action == "tool:sheet_clear" -> state.copy(spreadsheetState = SpreadsheetState())
-      action == "tool:undo" -> {
-        val prev = state.undoStack.lastOrNull() ?: return state
-        state.copy(doc = prev, undoStack = state.undoStack.dropLast(1))
+      action == "tool:simplify_step" -> {
+        val cur = state.currentResult as? EvalResult.UnreducedFraction ?: return state
+        state.copy(currentResult = ScientificEvaluator.simplifyFractionStep(cur))
       }
+      action == "tool:toggle_verify" -> {
+        val next = !state.verifyModeEnabled
+        state.copy(verifyModeEnabled = next, toastBanner = if (next) "Verificar: ON" else "Verificar: OFF")
+      }
+      action == "tool:toggle_simplify" -> {
+        val next = if (state.settings.simplifyMode == SimplifyMode.AUTO) SimplifyMode.MANUAL else SimplifyMode.AUTO
+        val upd = state.settings.copy(simplifyMode = next)
+        persistSettings(upd)
+        state.copy(settings = upd, toastBanner = "${upd.tr("Simplificar", "Simplify")}: ${upd.tr(next.labelEs, next.labelEn)}")
+      }
+      action == "tool:mbox_toggle_list" -> state.copy(
+        mathBoxState = state.mathBoxState.copy(diceShowList = !state.mathBoxState.diceShowList)
+      )
+      action == "tool:mbox_menu" -> state.copy(
+        mathBoxState = state.mathBoxState.copy(phase = MathBoxState.Phase.SELECT_TYPE)
+      )
+      action == "tool:mbox_nl_reset" -> state.copy(
+        mathBoxState = state.mathBoxState.copy(nlPanOffset = 0.0, nlZoom = 1.0)
+      )
+      action == "tool:mbox_circle_unit" -> state.copy(
+        mathBoxState = state.mathBoxState.copy(circleMode = CircleModeType.UNIT, phase = MathBoxState.Phase.RESULTS)
+      )
+      action == "tool:mbox_circle_half" -> state.copy(
+        mathBoxState = state.mathBoxState.copy(
+          circleMode = CircleModeType.HALF,
+          circleAngleDeg = state.mathBoxState.circleAngleDeg.coerceIn(0, 180),
+          phase = MathBoxState.Phase.RESULTS,
+        )
+      )
+      action == "tool:mbox_circle_clock" -> state.copy(
+        mathBoxState = state.mathBoxState.copy(circleMode = CircleModeType.CLOCK, phase = MathBoxState.Phase.RESULTS)
+      )
+      action == "tool:undo" -> undoActiveDoc(state)
       action == "tool:clear_hist" -> state.copy(history = emptyList(), historyBrowseIdx = -1)
       action == "tool:store" -> state.copy(overlay = OverlayScreen.VARIABLE_MENU, overlayCursor = 0, storePending = true)
       action == "tool:fx_menu" -> state.copy(
@@ -454,6 +611,18 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
       action == "tpl:prod" -> insertIntoActiveDoc(state, continueWithAns = false) { d -> MathEditor.insertTemplate(d, MathElement.ProductOp(), initialSlot = 2) }
       action == "tpl:abs" -> insertIntoActiveDoc(state, continueWithAns = false) { d -> MathEditor.insertTemplate(d, MathElement.AbsBox(), initialSlot = 0) }
       action == "tpl:logbase" -> insertIntoActiveDoc(state, continueWithAns = false) { d -> MathEditor.insertTemplate(d, MathElement.LogBase(), initialSlot = 0) }
+      action == "tpl:cbrt" -> insertIntoActiveDoc(state, continueWithAns = false) { d ->
+        val cbrt = MathElement.NthRoot(index = MathRow(listOf(MathElement.Token("3", TokenKind.DIGIT, "3"))), radicand = MathRow())
+        MathEditor.insertTemplate(d, cbrt, initialSlot = 1)
+      }
+      action == "tpl:pow10" -> insertIntoActiveDoc(state, continueWithAns = false) { d ->
+        val with10 = MathEditor.insertToken(MathEditor.insertToken(d, MathElement.Token("1", TokenKind.DIGIT, "1")), MathElement.Token("0", TokenKind.DIGIT, "0"))
+        MathEditor.insertTemplate(with10, MathElement.Superscript(), initialSlot = 0)
+      }
+      action == "tpl:powe" -> insertIntoActiveDoc(state, continueWithAns = false) { d ->
+        val withE = MathEditor.insertToken(d, MathElement.Token("e", TokenKind.CONSTANT, "e"))
+        MathEditor.insertTemplate(withE, MathElement.Superscript(), initialSlot = 0)
+      }
       action.startsWith("fn:") -> {
         val fn = action.removePrefix("fn:")
         insertIntoActiveDoc(state, continueWithAns = false) { d -> MathEditor.insertToken(d, MathElement.Token(fn, TokenKind.FUNC_OPEN, fn)) }
@@ -493,10 +662,25 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
   private fun handleSettingsKey(state: CalculatorUiState, key: CalcKey): CalculatorUiState {
     val maxIdx = when (state.settingsPage) {
       0 -> 2
-      1 -> 5
-      2 -> 3
+      1 -> 7
+      2 -> 5
       3 -> 2
+      4 -> when (state.settingsDetailKey) {
+        "ANGLE" -> 2
+        else -> 3
+      }
+      5 -> 9
       else -> 3
+    }
+    if (state.settingsPage == 5) {
+      val directDigit = when (key) {
+        CalcKey.D0 -> 0; CalcKey.D1 -> 1; CalcKey.D2 -> 2; CalcKey.D3 -> 3; CalcKey.D4 -> 4
+        CalcKey.D5 -> 5; CalcKey.D6 -> 6; CalcKey.D7 -> 7; CalcKey.D8 -> 8; CalcKey.D9 -> 9
+        else -> null
+      }
+      if (directDigit != null) {
+        return confirmSettingsItem(state.copy(overlayCursor = directDigit))
+      }
     }
     return when (key) {
       CalcKey.UP -> state.copy(overlayCursor = if (state.overlayCursor <= 0) maxIdx else state.overlayCursor - 1)
@@ -517,6 +701,7 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
       CalcKey.BACK -> {
         when (state.settingsPage) {
           0 -> state.copy(overlay = OverlayScreen.NONE)
+          5 -> state.copy(settingsPage = 4, settingsDetailKey = "NUMFMT", overlayCursor = state.settings.numberFormat.ordinal)
           4 -> state.copy(settingsPage = 1, overlayCursor = 0)
           else -> state.copy(settingsPage = 0, overlayCursor = 0)
         }
@@ -556,8 +741,19 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
           persistSettings(upd)
           state.copy(settings = upd)
         }
-        else -> {
+        5 -> {
           val upd = state.settings.copy(statFrequency = !state.settings.statFrequency)
+          persistSettings(upd)
+          state.copy(settings = upd)
+        }
+        6 -> {
+          val upd = state.settings.copy(digitSeparator = !state.settings.digitSeparator)
+          persistSettings(upd)
+          state.copy(settings = upd)
+        }
+        else -> {
+          val next = if (state.settings.simplifyMode == SimplifyMode.AUTO) SimplifyMode.MANUAL else SimplifyMode.AUTO
+          val upd = state.settings.copy(simplifyMode = next)
           persistSettings(upd)
           state.copy(settings = upd)
         }
@@ -576,8 +772,20 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
           persistSettings(upd)
           state.copy(settings = upd)
         }
-        else -> {
+        3 -> {
           val upd = state.settings.copy(hapticsEnabled = !state.settings.hapticsEnabled)
+          persistSettings(upd)
+          state.copy(settings = upd)
+        }
+        4 -> {
+          val next = if (state.settings.qrVersion == QrVersion.V11) QrVersion.V3 else QrVersion.V11
+          val upd = state.settings.copy(qrVersion = next)
+          persistSettings(upd)
+          state.copy(settings = upd)
+        }
+        else -> {
+          val next = if (state.settings.autoPowerOff == AutoPowerOff.MIN_10) AutoPowerOff.MIN_60 else AutoPowerOff.MIN_10
+          val upd = state.settings.copy(autoPowerOff = next)
           persistSettings(upd)
           state.copy(settings = upd)
         }
@@ -599,15 +807,48 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
           CalculatorUiState(settings = def, toastBanner = state.settings.tr("Todo inicializado", "Initialized All"))
         }
       }
-      4 -> {
-        val upd = when (state.settingsDetailKey) {
-          "IO" -> state.settings.copy(inputOutput = InputOutputMode.entries[idx.coerceIn(0, 3)])
-          "ANGLE" -> state.settings.copy(angleUnit = AngleUnit.entries[idx.coerceIn(0, 2)])
-          "NUMFMT" -> state.settings.copy(numberFormat = NumberFormatMode.entries[idx.coerceIn(0, 3)])
-          else -> state.settings
+      4 -> when (state.settingsDetailKey) {
+        "IO" -> {
+          val upd = state.settings.copy(inputOutput = InputOutputMode.entries[idx.coerceIn(0, 3)])
+          persistSettings(upd)
+          state.copy(settings = upd, settingsPage = 1, overlayCursor = 0)
+        }
+        "ANGLE" -> {
+          val upd = state.settings.copy(angleUnit = AngleUnit.entries[idx.coerceIn(0, 2)])
+          persistSettings(upd)
+          state.copy(settings = upd, settingsPage = 1, overlayCursor = 1)
+        }
+        "NUMFMT" -> {
+          val chosen = NumberFormatMode.entries[idx.coerceIn(0, 3)]
+          val upd = state.settings.copy(numberFormat = chosen)
+          persistSettings(upd)
+          when (chosen) {
+            NumberFormatMode.FIX -> state.copy(
+              settings = upd,
+              settingsPage = 5,
+              settingsDetailKey = "FIX_DIGITS",
+              overlayCursor = upd.fixDigits.coerceIn(0, 9),
+            )
+            NumberFormatMode.SCI -> state.copy(
+              settings = upd,
+              settingsPage = 5,
+              settingsDetailKey = "SCI_DIGITS",
+              overlayCursor = upd.sciDigits.coerceIn(0, 9),
+            )
+            else -> state.copy(settings = upd, settingsPage = 1, overlayCursor = 2)
+          }
+        }
+        else -> state.copy(settingsPage = 1, overlayCursor = 0)
+      }
+      5 -> {
+        val d = idx.coerceIn(0, 9)
+        val upd = if (state.settingsDetailKey == "FIX_DIGITS") {
+          state.settings.copy(numberFormat = NumberFormatMode.FIX, fixDigits = d)
+        } else {
+          state.settings.copy(numberFormat = NumberFormatMode.SCI, sciDigits = d)
         }
         persistSettings(upd)
-        state.copy(settings = upd, settingsPage = 1, overlayCursor = 0)
+        state.copy(settings = upd, settingsPage = 1, overlayCursor = 2)
       }
       else -> state
     }
@@ -658,6 +899,8 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
       state.mode == CalcMode.TABLE && state.tableState.phase == TableState.Phase.EDIT_G -> state.tableState.gDoc
       state.mode == CalcMode.EQUATION && state.equationState.subType == EquationState.SubType.SOLVER_EQ ->
         state.equationState.solverDoc
+      state.mode == CalcMode.STATISTICS && state.statsState.phase == StatsAppState.Phase.STAT_CALC ->
+        state.statsState.calcDoc
       else -> state.doc
     }
   }
@@ -665,15 +908,23 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
   private fun setActiveDoc(state: CalculatorUiState, newDoc: EditorDocument): CalculatorUiState {
     return when {
       state.editingFxTarget == 0 ->
-        state.copy(tableState = state.tableState.copy(fDoc = newDoc))
+        state.copy(tableState = state.tableState.copy(fDoc = newDoc), fxUndoStack = (state.fxUndoStack + state.tableState.fDoc).takeLast(20))
       state.editingFxTarget == 1 ->
-        state.copy(tableState = state.tableState.copy(gDoc = newDoc))
+        state.copy(tableState = state.tableState.copy(gDoc = newDoc), fxUndoStack = (state.fxUndoStack + state.tableState.gDoc).takeLast(20))
       state.mode == CalcMode.TABLE && state.tableState.phase == TableState.Phase.EDIT_F ->
-        state.copy(tableState = state.tableState.copy(fDoc = newDoc))
+        state.copy(tableState = state.tableState.copy(fDoc = newDoc), fxUndoStack = (state.fxUndoStack + state.tableState.fDoc).takeLast(20))
       state.mode == CalcMode.TABLE && state.tableState.phase == TableState.Phase.EDIT_G ->
-        state.copy(tableState = state.tableState.copy(gDoc = newDoc))
+        state.copy(tableState = state.tableState.copy(gDoc = newDoc), fxUndoStack = (state.fxUndoStack + state.tableState.gDoc).takeLast(20))
       state.mode == CalcMode.EQUATION && state.equationState.subType == EquationState.SubType.SOLVER_EQ ->
-        state.copy(equationState = state.equationState.copy(solverDoc = newDoc, solverResult = null, solverError = null))
+        state.copy(
+          equationState = state.equationState.copy(solverDoc = newDoc, solverResult = null, solverError = null),
+          solverUndoStack = (state.solverUndoStack + state.equationState.solverDoc).takeLast(20),
+        )
+      state.mode == CalcMode.STATISTICS && state.statsState.phase == StatsAppState.Phase.STAT_CALC ->
+        state.copy(
+          statsState = state.statsState.copy(calcDoc = newDoc, calcResult = null),
+          statCalcUndoStack = (state.statCalcUndoStack + state.statsState.calcDoc).takeLast(20),
+        )
       else -> state.copy(
         doc = newDoc,
         undoStack = (state.undoStack + state.doc).takeLast(20),
@@ -681,6 +932,31 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
         resultFormatOverride = null,
         historyBrowseIdx = -1,
       )
+    }
+  }
+
+  private fun undoActiveDoc(state: CalculatorUiState): CalculatorUiState {
+    return when {
+      state.editingFxTarget == 0 || (state.mode == CalcMode.TABLE && state.tableState.phase == TableState.Phase.EDIT_F) -> {
+        val prev = state.fxUndoStack.lastOrNull() ?: return state
+        state.copy(tableState = state.tableState.copy(fDoc = prev), fxUndoStack = state.fxUndoStack.dropLast(1))
+      }
+      state.editingFxTarget == 1 || (state.mode == CalcMode.TABLE && state.tableState.phase == TableState.Phase.EDIT_G) -> {
+        val prev = state.fxUndoStack.lastOrNull() ?: return state
+        state.copy(tableState = state.tableState.copy(gDoc = prev), fxUndoStack = state.fxUndoStack.dropLast(1))
+      }
+      state.mode == CalcMode.EQUATION && state.equationState.subType == EquationState.SubType.SOLVER_EQ -> {
+        val prev = state.solverUndoStack.lastOrNull() ?: return state
+        state.copy(equationState = state.equationState.copy(solverDoc = prev), solverUndoStack = state.solverUndoStack.dropLast(1))
+      }
+      state.mode == CalcMode.STATISTICS && state.statsState.phase == StatsAppState.Phase.STAT_CALC -> {
+        val prev = state.statCalcUndoStack.lastOrNull() ?: return state
+        state.copy(statsState = state.statsState.copy(calcDoc = prev), statCalcUndoStack = state.statCalcUndoStack.dropLast(1))
+      }
+      else -> {
+        val prev = state.undoStack.lastOrNull() ?: return state
+        state.copy(doc = prev, undoStack = state.undoStack.dropLast(1))
+      }
     }
   }
 
@@ -733,7 +1009,7 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
       } else if (justEvaluated) {
         MathEditor.insertToken(EditorDocument(), token)
       } else {
-        MathEditor.insertToken(activeDoc, token)
+        MathEditor.insertToken(activeDoc, token, overwrite = state.insertOverwriteMode)
       }
       return setActiveDoc(state, baseDoc)
     }
@@ -773,8 +1049,11 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
       }
       CalcKey.DEL -> {
         if (isShift) {
-          val prev = state.undoStack.lastOrNull() ?: return state
-          state.copy(doc = prev, undoStack = state.undoStack.dropLast(1))
+          val nextIns = !state.insertOverwriteMode
+          state.copy(
+            insertOverwriteMode = nextIns,
+            toastBanner = if (nextIns) "INS (Sobrescribir)" else "INS (Insertar)",
+          )
         } else {
           setActiveDoc(state, MathEditor.backspace(activeDoc))
         }
@@ -799,7 +1078,11 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
         if (activeDoc.root.isEmpty()) return state
         val result = evaluateCurrent(state) ?: return state
         val isError = result is EvalResult.ErrorResult
-        val newAns = if (!isError && result !is EvalResult.VerifyResult) result else state.ans
+        val storedAns = when (result) {
+          is EvalResult.RemainderResult -> EvalResult.RealResult(ExactReal.fromRational(Rational.of(result.quotient)))
+          else -> result
+        }
+        val newAns = if (!isError && result !is EvalResult.VerifyResult) storedAns else state.ans
         val newPreAns = if (!isError && result !is EvalResult.VerifyResult && state.ans != null) state.ans else state.preAns
         val newMats = if (result is EvalResult.MatrixResult) state.matrixState.matrices + ("MatAns" to result) else state.matrixState.matrices
         val newVcts = if (result is EvalResult.VectorResult) state.vectorState.vectors + ("VctAns" to result) else state.vectorState.vectors
@@ -820,27 +1103,70 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
         )
       }
 
-      // Numeric Pad (exact ClassWiz fx-991LA CW SHIFT mapping: 7=π, 8=e, 9=i; 0..6 & ops clean)
-      CalcKey.D0 -> startWithAnsIfOperator(MathElement.Token("0", TokenKind.DIGIT, "0"))
-      CalcKey.D1 -> startWithAnsIfOperator(MathElement.Token("1", TokenKind.DIGIT, "1"))
-      CalcKey.D2 -> startWithAnsIfOperator(MathElement.Token("2", TokenKind.DIGIT, "2"))
-      CalcKey.D3 -> startWithAnsIfOperator(MathElement.Token("3", TokenKind.DIGIT, "3"))
-      CalcKey.D4 -> startWithAnsIfOperator(MathElement.Token("4", TokenKind.DIGIT, "4"))
-      CalcKey.D5 -> startWithAnsIfOperator(MathElement.Token("5", TokenKind.DIGIT, "5"))
-      CalcKey.D6 -> startWithAnsIfOperator(MathElement.Token("6", TokenKind.DIGIT, "6"))
+      // Numeric Pad — Exact Casio fx-991LA CW SHIFT mapping:
+      // 7=π, 8=e, 9=i | 4=A, 5=B, 6=C | 1=D, 2=E, 3=F | 0=x, .=y, ×10ˣ=z
+      // ÷=÷R (└), +=° ' ", −=(−)
+      CalcKey.D0 -> if (isShift) startWithAnsIfOperator(MathElement.Token("x", TokenKind.VARIABLE, "x")) else startWithAnsIfOperator(MathElement.Token("0", TokenKind.DIGIT, "0"))
+      CalcKey.D1 -> if (isShift) {
+        val kind = if (state.mode == CalcMode.BASE_N) TokenKind.DIGIT else TokenKind.VARIABLE
+        startWithAnsIfOperator(MathElement.Token("D", kind, "D"))
+      } else startWithAnsIfOperator(MathElement.Token("1", TokenKind.DIGIT, "1"))
+      CalcKey.D2 -> if (isShift) {
+        val kind = if (state.mode == CalcMode.BASE_N) TokenKind.DIGIT else TokenKind.VARIABLE
+        startWithAnsIfOperator(MathElement.Token("E", kind, "E"))
+      } else startWithAnsIfOperator(MathElement.Token("2", TokenKind.DIGIT, "2"))
+      CalcKey.D3 -> if (isShift) {
+        val kind = if (state.mode == CalcMode.BASE_N) TokenKind.DIGIT else TokenKind.VARIABLE
+        startWithAnsIfOperator(MathElement.Token("F", kind, "F"))
+      } else startWithAnsIfOperator(MathElement.Token("3", TokenKind.DIGIT, "3"))
+      CalcKey.D4 -> if (isShift) {
+        val kind = if (state.mode == CalcMode.BASE_N) TokenKind.DIGIT else TokenKind.VARIABLE
+        startWithAnsIfOperator(MathElement.Token("A", kind, "A"))
+      } else startWithAnsIfOperator(MathElement.Token("4", TokenKind.DIGIT, "4"))
+      CalcKey.D5 -> if (isShift) {
+        val kind = if (state.mode == CalcMode.BASE_N) TokenKind.DIGIT else TokenKind.VARIABLE
+        startWithAnsIfOperator(MathElement.Token("B", kind, "B"))
+      } else startWithAnsIfOperator(MathElement.Token("5", TokenKind.DIGIT, "5"))
+      CalcKey.D6 -> if (isShift) {
+        val kind = if (state.mode == CalcMode.BASE_N) TokenKind.DIGIT else TokenKind.VARIABLE
+        startWithAnsIfOperator(MathElement.Token("C", kind, "C"))
+      } else startWithAnsIfOperator(MathElement.Token("6", TokenKind.DIGIT, "6"))
       CalcKey.D7 -> if (isShift) startWithAnsIfOperator(MathElement.Token("π", TokenKind.CONSTANT, "π")) else startWithAnsIfOperator(MathElement.Token("7", TokenKind.DIGIT, "7"))
       CalcKey.D8 -> if (isShift) startWithAnsIfOperator(MathElement.Token("e", TokenKind.CONSTANT, "e")) else startWithAnsIfOperator(MathElement.Token("8", TokenKind.DIGIT, "8"))
       CalcKey.D9 -> if (isShift) startWithAnsIfOperator(MathElement.Token("i", TokenKind.CONSTANT, "i")) else startWithAnsIfOperator(MathElement.Token("9", TokenKind.DIGIT, "9"))
-      CalcKey.DOT -> startWithAnsIfOperator(MathElement.Token(".", TokenKind.DECIMAL, "."))
-      CalcKey.EXP10 -> startWithAnsIfOperator(MathElement.Token("×10^", TokenKind.DIGIT, "×10^"))
+      CalcKey.DOT -> if (isShift) startWithAnsIfOperator(MathElement.Token("y", TokenKind.VARIABLE, "y")) else startWithAnsIfOperator(MathElement.Token(".", TokenKind.DECIMAL, "."))
+      CalcKey.EXP10 -> if (isShift) startWithAnsIfOperator(MathElement.Token("z", TokenKind.VARIABLE, "z")) else startWithAnsIfOperator(MathElement.Token("×10^", TokenKind.DIGIT, "×10^"))
 
-      // Basic Operators
-      CalcKey.ADD -> startWithAnsIfOperator(MathElement.Token("+", TokenKind.OPERATOR, "+"))
-      CalcKey.SUB -> startWithAnsIfOperator(MathElement.Token("-", TokenKind.OPERATOR, "-"))
+      // Basic Operators — Exact fx-991LA CW SHIFT: +=° ' ", −=(−), ÷=÷R (└)
+      CalcKey.ADD -> {
+        if (isShift) {
+          val base = if (justEvaluated) EditorDocument() else activeDoc
+          val countDms = base.root.items.count { it is MathElement.Token && (it.evalCode == "°" || it.evalCode == "'" || it.evalCode == "\"") }
+          val sym = when (countDms % 3) { 0 -> "°"; 1 -> "'"; else -> "\"" }
+          setActiveDoc(state, MathEditor.insertToken(base, MathElement.Token(sym, TokenKind.POSTFIX, sym)))
+        } else {
+          startWithAnsIfOperator(MathElement.Token("+", TokenKind.OPERATOR, "+"))
+        }
+      }
+      CalcKey.SUB -> {
+        if (isShift) {
+          startWithAnsIfOperator(MathElement.Token("-", TokenKind.OPERATOR, "(-)"))
+        } else {
+          startWithAnsIfOperator(MathElement.Token("-", TokenKind.OPERATOR, "-"))
+        }
+      }
       CalcKey.MUL -> startWithAnsIfOperator(MathElement.Token("×", TokenKind.OPERATOR, "×"))
-      CalcKey.DIV -> startWithAnsIfOperator(MathElement.Token("÷", TokenKind.OPERATOR, "÷"))
+      CalcKey.DIV -> {
+        if (isShift) {
+          startWithAnsIfOperator(MathElement.Token("÷R", TokenKind.OPERATOR, "÷R"))
+        } else {
+          startWithAnsIfOperator(MathElement.Token("÷", TokenKind.OPERATOR, "÷"))
+        }
+      }
 
-      // Scientific Grid (3x6 exact ClassWiz fx-991LA CW)
+      // Scientific Grid (2×6 exact Casio fx-991LA CW):
+      // Row 1: x(QR) | ■/□(□ ■/□) | √■(ˣ√□) | ■^□(■⁻¹) | ■²(log) | log_■□(ln)
+      // Row 2: Ans(PreAns) | sen(Arc sen) | cos(Arc cos) | tan(Arc tan) | ( (=) | ) (;)
       CalcKey.VAR_X -> startWithAnsIfOperator(MathElement.Token("x", TokenKind.VARIABLE, "x"))
       CalcKey.FRAC -> {
         if (isShift) {
@@ -851,19 +1177,14 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
       }
       CalcKey.SQRT -> {
         if (isShift) {
-          val cubeRoot = MathElement.NthRoot(index = MathRow(listOf(MathElement.Token("3", TokenKind.DIGIT, "3"))), radicand = MathRow())
-          insertTemplateSmart(state, activeDoc, justEvaluated, cubeRoot, 1, false)
+          insertTemplateSmart(state, activeDoc, justEvaluated, MathElement.NthRoot(), 0, false)
         } else {
           insertTemplateSmart(state, activeDoc, justEvaluated, MathElement.Sqrt(), 0, false)
         }
       }
-      CalcKey.SQUARE -> {
-        val tok = if (isShift) MathElement.Token("⁻¹", TokenKind.POSTFIX, "⁻¹") else MathElement.Token("²", TokenKind.POSTFIX, "²")
-        startWithAnsIfOperator(tok)
-      }
       CalcKey.POWER -> {
         if (isShift) {
-          insertTemplateSmart(state, activeDoc, justEvaluated, MathElement.NthRoot(), 0, false)
+          startWithAnsIfOperator(MathElement.Token("⁻¹", TokenKind.POSTFIX, "⁻¹"))
         } else {
           val baseDoc = if (justEvaluated) {
             val ansName = ansTokenName()
@@ -872,9 +1193,16 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
           setActiveDoc(state, MathEditor.insertTemplate(baseDoc, MathElement.Superscript(), initialSlot = 0))
         }
       }
+      CalcKey.SQUARE -> {
+        if (isShift) {
+          startWithAnsIfOperator(MathElement.Token("log(", TokenKind.FUNC_OPEN, "log("))
+        } else {
+          startWithAnsIfOperator(MathElement.Token("²", TokenKind.POSTFIX, "²"))
+        }
+      }
       CalcKey.LOG_BASE -> {
         if (isShift) {
-          insertTemplateSmart(state, activeDoc, justEvaluated, MathElement.Integral(), 0, false)
+          startWithAnsIfOperator(MathElement.Token("ln(", TokenKind.FUNC_OPEN, "ln("))
         } else {
           insertTemplateSmart(state, activeDoc, justEvaluated, MathElement.LogBase(), 0, false)
         }
@@ -901,10 +1229,7 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
       CalcKey.SIN -> startWithAnsIfOperator(MathElement.Token(if (isShift) "sin⁻¹(" else "sin(", TokenKind.FUNC_OPEN, if (isShift) "sin⁻¹(" else "sin("))
       CalcKey.COS -> startWithAnsIfOperator(MathElement.Token(if (isShift) "cos⁻¹(" else "cos(", TokenKind.FUNC_OPEN, if (isShift) "cos⁻¹(" else "cos("))
       CalcKey.TAN -> startWithAnsIfOperator(MathElement.Token(if (isShift) "tan⁻¹(" else "tan(", TokenKind.FUNC_OPEN, if (isShift) "tan⁻¹(" else "tan("))
-      CalcKey.NEG -> {
-        if (isShift) insertTemplateSmart(state, activeDoc, justEvaluated, MathElement.AbsBox(), 0, false)
-        else startWithAnsIfOperator(MathElement.Token("-", TokenKind.OPERATOR, "(-)"))
-      }
+      CalcKey.NEG -> startWithAnsIfOperator(MathElement.Token("-", TokenKind.OPERATOR, "(-)"))
       CalcKey.DMS -> {
         if (isShift) {
           startWithAnsIfOperator(MathElement.Token("!", TokenKind.POSTFIX, "!"))
@@ -917,7 +1242,7 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
       }
       CalcKey.PAREN_OPEN -> {
         if (isShift) {
-          startWithAnsIfOperator(MathElement.Token("%", TokenKind.POSTFIX, "%"))
+          startWithAnsIfOperator(MathElement.Token("=", TokenKind.OPERATOR, "="))
         } else {
           startWithAnsIfOperator(MathElement.Token("(", TokenKind.PAREN_OPEN, "("))
         }
@@ -938,7 +1263,7 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
         startWithAnsIfOperator(MathElement.Token(op, TokenKind.OPERATOR, op))
       }
       CalcKey.ANS -> {
-        val code = if (isShift) "PreAns" else "Ans"
+        val code = if (isShift) "PreAns" else ansTokenName()
         val base = if (justEvaluated) EditorDocument() else activeDoc
         setActiveDoc(state, MathEditor.insertToken(base, MathElement.Token(code, TokenKind.VARIABLE, code)))
       }
@@ -958,6 +1283,8 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
         state.copy(tableState = state.tableState.copy(gDoc = newDoc))
       state.mode == CalcMode.EQUATION && state.equationState.subType == EquationState.SubType.SOLVER_EQ ->
         state.copy(equationState = state.equationState.copy(solverDoc = newDoc))
+      state.mode == CalcMode.STATISTICS && state.statsState.phase == StatsAppState.Phase.STAT_CALC ->
+        state.copy(statsState = state.statsState.copy(calcDoc = newDoc))
       else -> state.copy(doc = newDoc)
     }
   }
@@ -985,6 +1312,8 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
       ans = state.ans,
       preAns = state.preAns,
       statSummary = state.statsState.summary,
+      statModel = state.statsState.model,
+      verifyModeEnabled = state.verifyModeEnabled,
       fExpr = state.tableState.fDoc.root,
       gExpr = state.tableState.gDoc.root,
     )
@@ -1003,7 +1332,7 @@ class CalculatorViewModel(application: Application) : AndroidViewModel(applicati
     } else {
       buildQrPayload(state)
     }
-    val matrix = QrEncoder.encode(payload)
+    val matrix = QrEncoder.encode(payload, state.settings.qrVersion)
     return state.copy(
       overlay = OverlayScreen.QR_VIEW,
       qrTitle = title,

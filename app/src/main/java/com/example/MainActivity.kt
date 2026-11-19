@@ -30,6 +30,7 @@ class MainActivity : ComponentActivity() {
           onSelectOverlayItem = vm::selectOverlayItem,
           onContrastChange = vm::selectSettingsContrast,
           onSelectSpreadsheetCell = vm::selectSpreadsheetCell,
+          onSpreadsheetInsert = vm::insertSpreadsheetSymbol,
         )
       }
     }

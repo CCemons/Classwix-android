@@ -21,9 +21,10 @@ object QrEncoder {
     VersionSpec(4, 33, 80, 20, 26),
   )
 
-  fun encode(text: String): List<List<Boolean>> {
+  fun encode(text: String, qrVersion: QrVersion = QrVersion.V11): List<List<Boolean>> {
     val rawBytes = text.toByteArray(Charsets.UTF_8)
-    val spec = specs.firstOrNull { rawBytes.size <= it.dataCodewords - 2 } ?: specs.last()
+    val minVer = if (qrVersion == QrVersion.V3) 3 else 1
+    val spec = specs.firstOrNull { it.version >= minVer && rawBytes.size <= it.dataCodewords - 2 } ?: specs.last()
     val maxBytes = spec.dataCodewords - 2
     val bytes = if (rawBytes.size > maxBytes) rawBytes.copyOf(maxBytes) else rawBytes
 

@@ -28,7 +28,7 @@ object ModeKeyHandler {
       return when (key) {
         CalcKey.D7 -> "3.141592654"
         CalcKey.D8 -> "2.718281828"
-        CalcKey.EXP10 -> "3.141592654"
+        CalcKey.SUB -> if (buf.isEmpty()) "-" else if (buf.startsWith("-")) buf.drop(1) else "-$buf"
         else -> null
       }
     }
@@ -58,7 +58,8 @@ object ModeKeyHandler {
       TableState.Phase.EDIT_F, TableState.Phase.EDIT_G -> {
         if (key == CalcKey.EXE || key == CalcKey.OK) {
           if (ts.phase == TableState.Phase.EDIT_F) {
-            state.copy(tableState = ts.copy(phase = TableState.Phase.EDIT_G))
+            if (ts.showG) state.copy(tableState = ts.copy(phase = TableState.Phase.EDIT_G))
+            else state.copy(tableState = ts.copy(phase = TableState.Phase.RANGE_SETUP, selectedRow = 0))
           } else {
             state.copy(tableState = ts.copy(phase = TableState.Phase.RANGE_SETUP, selectedRow = 0))
           }
@@ -95,15 +96,49 @@ object ModeKeyHandler {
       }
       TableState.Phase.RESULT_TABLE -> {
         val maxRow = (ts.rows.size - 1).coerceAtLeast(0)
+        val maxCol = if (ts.showG) 2 else 1
+        if (ts.editingXRow != null) {
+          return when (key) {
+            CalcKey.OK, CalcKey.EXE -> {
+              val newX = ts.editingXBuffer.toDoubleOrNull()
+              if (newX != null && ts.editingXRow in ts.rows.indices) {
+                val baseCtx = EvalContext(
+                  state.settings, CalcMode.CALCULATE,
+                  variables = state.variables + ("x" to EvalResult.RealResult(ExactReal.fromDouble(newX))),
+                  ans = state.ans, fExpr = ts.fDoc.root, gExpr = ts.gDoc.root
+                )
+                val fx = if (ts.fDoc.root.isEmpty()) null else runCatching { ScientificEvaluator.evaluateReal(ts.fDoc.root, baseCtx) }.getOrNull()
+                val gx = if (!ts.showG || ts.gDoc.root.isEmpty()) null else runCatching { ScientificEvaluator.evaluateReal(ts.gDoc.root, baseCtx) }.getOrNull()
+                val updatedRows = ts.rows.mapIndexed { i, r -> if (i == ts.editingXRow) TableState.TableRow(newX, fx, gx) else r }
+                state.copy(tableState = ts.copy(rows = updatedRows, editingXRow = null, editingXBuffer = ""))
+              } else {
+                state.copy(tableState = ts.copy(editingXRow = null, editingXBuffer = ""))
+              }
+            }
+            CalcKey.BACK -> state.copy(tableState = ts.copy(editingXRow = null, editingXBuffer = ""))
+            else -> {
+              val next = appendNumericKey(ts.editingXBuffer, key, isShift) ?: return state
+              state.copy(tableState = ts.copy(editingXBuffer = next))
+            }
+          }
+        }
         when (key) {
           CalcKey.UP -> state.copy(tableState = ts.copy(selectedRow = (ts.selectedRow - 1).coerceAtLeast(0)))
           CalcKey.DOWN -> state.copy(tableState = ts.copy(selectedRow = (ts.selectedRow + 1).coerceAtMost(maxRow)))
           CalcKey.PAGE_UP -> state.copy(tableState = ts.copy(selectedRow = (ts.selectedRow - 4).coerceAtLeast(0)))
           CalcKey.PAGE_DOWN -> state.copy(tableState = ts.copy(selectedRow = (ts.selectedRow + 4).coerceAtMost(maxRow)))
           CalcKey.LEFT -> state.copy(tableState = ts.copy(selectedCol = (ts.selectedCol - 1).coerceAtLeast(0)))
-          CalcKey.RIGHT -> state.copy(tableState = ts.copy(selectedCol = (ts.selectedCol + 1).coerceAtMost(2)))
+          CalcKey.RIGHT -> state.copy(tableState = ts.copy(selectedCol = (ts.selectedCol + 1).coerceAtMost(maxCol)))
           CalcKey.BACK, CalcKey.AC -> state.copy(tableState = ts.copy(phase = TableState.Phase.EDIT_F))
-          else -> state
+          else -> {
+            if (ts.selectedCol == 0 && ts.rows.isNotEmpty()) {
+              val ch = appendNumericKey("", key, isShift)
+              if (ch != null && ch.isNotEmpty()) {
+                return state.copy(tableState = ts.copy(editingXRow = ts.selectedRow, editingXBuffer = ch))
+              }
+            }
+            state
+          }
         }
       }
     }
@@ -126,13 +161,13 @@ object ModeKeyHandler {
     while ((ts.end >= ts.start && x <= ts.end + 1e-9 || ts.end < ts.start && x >= ts.end - 1e-9) && count < 45) {
       val subCtx = baseCtx.copy(variables = baseCtx.variables + ("x" to EvalResult.RealResult(ExactReal.fromDouble(x))))
       val fx = if (ts.fDoc.root.isEmpty()) null else try { ScientificEvaluator.evaluateReal(ts.fDoc.root, subCtx) } catch (_: Exception) { null }
-      val gx = if (ts.gDoc.root.isEmpty()) null else try { ScientificEvaluator.evaluateReal(ts.gDoc.root, subCtx) } catch (_: Exception) { null }
+      val gx = if (!ts.showG || ts.gDoc.root.isEmpty()) null else try { ScientificEvaluator.evaluateReal(ts.gDoc.root, subCtx) } catch (_: Exception) { null }
       rows.add(TableState.TableRow(x, fx, gx))
       x += if (ts.end >= ts.start) step else -step
       count++
     }
     return state.copy(
-      tableState = ts.copy(phase = TableState.Phase.RESULT_TABLE, rows = rows, selectedRow = 0, selectedCol = 0)
+      tableState = ts.copy(phase = TableState.Phase.RESULT_TABLE, rows = rows, selectedRow = 0, selectedCol = 0, editingXRow = null, editingXBuffer = "")
     )
   }
 
@@ -241,7 +276,8 @@ object ModeKeyHandler {
         }
       }
       EquationState.SubType.POLY_RESULT -> {
-        val maxIdx = eq.polyRoots.lastIndex.coerceAtLeast(0)
+        val totalItems = eq.polyRoots.size + if (eq.polyVertex != null) 2 else 0
+        val maxIdx = (totalItems - 1).coerceAtLeast(0)
         when (key) {
           CalcKey.UP -> state.copy(equationState = eq.copy(activeRow = (eq.activeRow - 1).coerceAtLeast(0)))
           CalcKey.DOWN -> state.copy(equationState = eq.copy(activeRow = (eq.activeRow + 1).coerceAtMost(maxIdx)))
@@ -403,7 +439,10 @@ object ModeKeyHandler {
     val eq = state.equationState
     val coeffs = eq.polyCoeffs.take(eq.degree + 1).map { it.toDoubleOrNull() ?: 0.0 }
     val roots = AdvancedMathSolvers.solvePolynomial(coeffs)
-    return state.copy(equationState = eq.copy(subType = EquationState.SubType.POLY_RESULT, polyRoots = roots, activeRow = 0))
+    val vertex = if (eq.degree == 2 && coeffs.size >= 3) {
+      AdvancedMathSolvers.quadraticVertex(coeffs[0], coeffs[1], coeffs[2])
+    } else null
+    return state.copy(equationState = eq.copy(subType = EquationState.SubType.POLY_RESULT, polyRoots = roots, polyVertex = vertex, activeRow = 0))
   }
 
   private fun runNumericalSolver(state: CalculatorUiState): CalculatorUiState {
@@ -648,16 +687,27 @@ object ModeKeyHandler {
   private fun handleStatsKey(state: CalculatorUiState, key: CalcKey, isShift: Boolean): CalculatorUiState? {
     val st = state.statsState
     return when (st.phase) {
-      StatsAppState.Phase.SELECT_MODEL -> when (key) {
-        CalcKey.UP -> state.copy(statsState = st.copy(activeRow = (st.activeRow - 1).coerceAtLeast(0)))
-        CalcKey.DOWN -> state.copy(statsState = st.copy(activeRow = (st.activeRow + 1).coerceAtMost(StatModelType.entries.lastIndex)))
-        CalcKey.PAGE_UP -> state.copy(statsState = st.copy(activeRow = (st.activeRow - 4).coerceAtLeast(0)))
-        CalcKey.PAGE_DOWN -> state.copy(statsState = st.copy(activeRow = (st.activeRow + 4).coerceAtMost(StatModelType.entries.lastIndex)))
-        CalcKey.OK, CalcKey.EXE -> {
-          val model = StatModelType.entries[st.activeRow.coerceIn(0, StatModelType.entries.lastIndex)]
-          state.copy(statsState = st.copy(model = model, phase = StatsAppState.Phase.DATA_GRID, activeRow = 0, activeCol = 0, inputBuffer = ""))
+      StatsAppState.Phase.SELECT_MODEL -> {
+        val digitPick = when (key) {
+          CalcKey.D1 -> 0; CalcKey.D2 -> 1; CalcKey.D3 -> 2; CalcKey.D4 -> 3
+          CalcKey.D5 -> 4; CalcKey.D6 -> 5; CalcKey.D7 -> 6; CalcKey.D8 -> 7
+          else -> null
         }
-        else -> state
+        if (digitPick != null && digitPick <= StatModelType.entries.lastIndex) {
+          val model = StatModelType.entries[digitPick]
+          return state.copy(statsState = st.copy(model = model, phase = StatsAppState.Phase.DATA_GRID, activeRow = 0, activeCol = 0, inputBuffer = ""))
+        }
+        when (key) {
+          CalcKey.UP -> state.copy(statsState = st.copy(activeRow = (st.activeRow - 1).coerceAtLeast(0)))
+          CalcKey.DOWN -> state.copy(statsState = st.copy(activeRow = (st.activeRow + 1).coerceAtMost(StatModelType.entries.lastIndex)))
+          CalcKey.PAGE_UP -> state.copy(statsState = st.copy(activeRow = (st.activeRow - 4).coerceAtLeast(0)))
+          CalcKey.PAGE_DOWN -> state.copy(statsState = st.copy(activeRow = (st.activeRow + 4).coerceAtMost(StatModelType.entries.lastIndex)))
+          CalcKey.OK, CalcKey.EXE -> {
+            val model = StatModelType.entries[st.activeRow.coerceIn(0, StatModelType.entries.lastIndex)]
+            state.copy(statsState = st.copy(model = model, phase = StatsAppState.Phase.DATA_GRID, activeRow = 0, activeCol = 0, inputBuffer = ""))
+          }
+          else -> state
+        }
       }
       StatsAppState.Phase.DATA_GRID -> {
         val showY = st.model != StatModelType.ONE_VAR
@@ -689,6 +739,10 @@ object ModeKeyHandler {
           CalcKey.DOWN -> commitCell(state).let { s -> s.copy(statsState = s.statsState.copy(activeRow = (s.statsState.activeRow + 1).coerceAtMost(s.statsState.xValues.size))) }
           CalcKey.PAGE_UP -> commitCell(state).let { s -> s.copy(statsState = s.statsState.copy(activeRow = (s.statsState.activeRow - 4).coerceAtLeast(0))) }
           CalcKey.PAGE_DOWN -> commitCell(state).let { s -> s.copy(statsState = s.statsState.copy(activeRow = (s.statsState.activeRow + 4).coerceAtMost(s.statsState.xValues.size))) }
+          CalcKey.AC -> {
+            if (st.inputBuffer.isNotEmpty()) state.copy(statsState = st.copy(inputBuffer = ""))
+            else state.copy(statsState = st.copy(xValues = emptyList(), yValues = emptyList(), freqValues = emptyList(), activeRow = 0, activeCol = 0))
+          }
           CalcKey.OK -> commitCell(state).let { s ->
             s.copy(statsState = s.statsState.copy(activeRow = (s.statsState.activeRow + 1).coerceAtMost(s.statsState.xValues.size)))
           }
@@ -710,8 +764,8 @@ object ModeKeyHandler {
       StatsAppState.Phase.RESULTS -> {
         val maxResultRow = when (st.model) {
           StatModelType.ONE_VAR -> 10
-          StatModelType.QUADRATIC -> 17
-          else -> 16
+          StatModelType.QUADRATIC -> 20
+          else -> 19
         }
         when (key) {
           CalcKey.UP -> state.copy(statsState = st.copy(activeRow = (st.activeRow - 1).coerceAtLeast(0)))
@@ -720,6 +774,32 @@ object ModeKeyHandler {
           CalcKey.PAGE_DOWN -> state.copy(statsState = st.copy(activeRow = (st.activeRow + 4).coerceAtMost(maxResultRow)))
           CalcKey.BACK, CalcKey.AC -> state.copy(statsState = st.copy(phase = StatsAppState.Phase.DATA_GRID, activeRow = 0))
           else -> state
+        }
+      }
+      StatsAppState.Phase.STAT_CALC -> {
+        when (key) {
+          CalcKey.BACK -> state.copy(statsState = st.copy(phase = StatsAppState.Phase.DATA_GRID, activeRow = 0))
+          CalcKey.EXE, CalcKey.OK -> {
+            if (st.calcDoc.root.isEmpty()) return state
+            val summary = AdvancedMathSolvers.computeStatistics(
+              st.model, st.xValues, st.yValues,
+              if (state.settings.statFrequency) st.freqValues else List(st.xValues.size) { 1.0 }
+            )
+            val ctx = EvalContext(
+              settings = state.settings,
+              mode = CalcMode.CALCULATE,
+              variables = state.variables,
+              ans = state.ans,
+              statSummary = summary,
+              statModel = st.model,
+              fExpr = state.tableState.fDoc.root,
+              gExpr = state.tableState.gDoc.root,
+            )
+            val res = ScientificEvaluator.evaluate(st.calcDoc.root, ctx)
+            val newAns = if (res !is EvalResult.ErrorResult) res else state.ans
+            state.copy(statsState = st.copy(summary = summary, calcResult = res), ans = newAns)
+          }
+          else -> null // Delegate expression typing to main natural math editor
         }
       }
     }
@@ -795,28 +875,96 @@ object ModeKeyHandler {
     return state.copy(distributionState = d.copy(phase = DistributionState.Phase.RESULT, resultValue = res))
   }
 
-  // --- SPREADSHEET MODE ---
+  // --- SPREADSHEET MODE (A1:E45 with $, Fill Formula, Fill Value, Copy/Cut/Paste) ---
   private fun handleSpreadsheetKey(state: CalculatorUiState, key: CalcKey, isShift: Boolean): CalculatorUiState? {
     val sh = state.spreadsheetState
+    if (sh.subPhase != SpreadsheetState.SubPhase.GRID) {
+      val isFormula = sh.subPhase == SpreadsheetState.SubPhase.FILL_FORMULA
+      when (key) {
+        CalcKey.UP -> return state.copy(spreadsheetState = sh.copy(fillField = 0))
+        CalcKey.DOWN -> return state.copy(spreadsheetState = sh.copy(fillField = 1))
+        CalcKey.BACK -> return state.copy(spreadsheetState = sh.copy(subPhase = SpreadsheetState.SubPhase.GRID))
+        CalcKey.DEL -> {
+          return if (sh.fillField == 0) {
+            state.copy(spreadsheetState = sh.copy(fillSourceRaw = sh.fillSourceRaw.dropLast(1)))
+          } else {
+            state.copy(spreadsheetState = sh.copy(fillRange = sh.fillRange.dropLast(1)))
+          }
+        }
+        CalcKey.AC -> {
+          return if (sh.fillField == 0) state.copy(spreadsheetState = sh.copy(fillSourceRaw = ""))
+          else state.copy(spreadsheetState = sh.copy(fillRange = ""))
+        }
+        CalcKey.OK -> {
+          if (sh.fillField == 0) return state.copy(spreadsheetState = sh.copy(fillField = 1))
+        }
+        CalcKey.EXE -> {}
+        else -> {
+          val ch = when {
+            key == CalcKey.PAREN_OPEN && isShift -> "="
+            key == CalcKey.PAREN_CLOSE && isShift -> ":"
+            key == CalcKey.D4 && isShift -> "A"
+            key == CalcKey.D5 && isShift -> "B"
+            key == CalcKey.D6 && isShift -> "C"
+            key == CalcKey.D1 && isShift -> "D"
+            key == CalcKey.D2 && isShift -> "E"
+            key == CalcKey.EQ -> "="
+            key == CalcKey.ADD -> "+"
+            key == CalcKey.SUB || (key == CalcKey.NEG && !isShift) -> "-"
+            key == CalcKey.MUL -> "*"
+            key == CalcKey.DIV -> "/"
+            key == CalcKey.PAREN_OPEN -> "("
+            key == CalcKey.PAREN_CLOSE -> ")"
+            else -> appendNumericKey("", key, isShift)
+          } ?: return state
+          return if (sh.fillField == 0) {
+            state.copy(spreadsheetState = sh.copy(fillSourceRaw = sh.fillSourceRaw + ch))
+          } else {
+            state.copy(spreadsheetState = sh.copy(fillRange = sh.fillRange + ch.uppercase()))
+          }
+        }
+      }
+      // Execute Fill Formula or Fill Value on EXE / OK on field 1
+      val newCells = if (isFormula) {
+        val raw = if (sh.fillSourceRaw.startsWith("=")) sh.fillSourceRaw else "=${sh.fillSourceRaw}"
+        AdvancedMathSolvers.fillSpreadsheetFormula(sh.cells, sh.activeCol, sh.activeRow, raw, sh.fillRange)
+      } else {
+        AdvancedMathSolvers.fillSpreadsheetValue(sh.cells, sh.fillSourceRaw, sh.fillRange)
+      }
+      return state.copy(
+        spreadsheetState = sh.copy(
+          cells = newCells,
+          evaluated = AdvancedMathSolvers.evaluateSpreadsheet(newCells),
+          subPhase = SpreadsheetState.SubPhase.GRID,
+        )
+      )
+    }
+
     if (sh.editing) {
       return when (key) {
         CalcKey.OK, CalcKey.EXE -> {
           val keyName = sh.cellName()
           val newCells = if (sh.editBuffer.isEmpty()) sh.cells - keyName else sh.cells + (keyName to sh.editBuffer)
           val evald = AdvancedMathSolvers.evaluateSpreadsheet(newCells)
-          val nextRow = if (key == CalcKey.EXE) (sh.activeRow + 1).coerceAtMost(14) else sh.activeRow
+          val nextRow = if (key == CalcKey.EXE) (sh.activeRow + 1).coerceAtMost(44) else sh.activeRow
           state.copy(spreadsheetState = sh.copy(cells = newCells, evaluated = evald, editing = false, editBuffer = "", activeRow = nextRow))
         }
         CalcKey.BACK -> state.copy(spreadsheetState = sh.copy(editing = false, editBuffer = ""))
         CalcKey.DEL -> state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer.dropLast(1)))
         CalcKey.AC -> state.copy(spreadsheetState = sh.copy(editBuffer = ""))
         CalcKey.ADD -> state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + "+"))
-        CalcKey.SUB, CalcKey.NEG -> state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + "-"))
+        CalcKey.SUB -> state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + "-"))
+        CalcKey.NEG -> if (isShift) state else state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + "-"))
         CalcKey.MUL -> state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + "*"))
         CalcKey.DIV -> state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + "/"))
-        CalcKey.PAREN_OPEN -> state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + "("))
+        CalcKey.PAREN_OPEN -> state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + if (isShift) "=" else "("))
         CalcKey.PAREN_CLOSE -> state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + if (isShift) ":" else ")"))
         CalcKey.EQ -> state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + "="))
+        CalcKey.D4 -> state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + if (isShift) "A" else "4"))
+        CalcKey.D5 -> state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + if (isShift) "B" else "5"))
+        CalcKey.D6 -> state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + if (isShift) "C" else "6"))
+        CalcKey.D1 -> state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + if (isShift) "D" else "1"))
+        CalcKey.D2 -> state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + if (isShift) "E" else "2"))
         CalcKey.VAR_X -> state.copy(spreadsheetState = sh.copy(editBuffer = sh.editBuffer + "A1"))
         else -> {
           val next = appendNumericKey(sh.editBuffer, key, isShift) ?: return state
@@ -829,9 +977,9 @@ object ModeKeyHandler {
       CalcKey.LEFT -> state.copy(spreadsheetState = sh.copy(activeCol = (sh.activeCol - 1).coerceAtLeast(0)))
       CalcKey.RIGHT -> state.copy(spreadsheetState = sh.copy(activeCol = (sh.activeCol + 1).coerceAtMost(4)))
       CalcKey.UP -> state.copy(spreadsheetState = sh.copy(activeRow = (sh.activeRow - 1).coerceAtLeast(0)))
-      CalcKey.DOWN -> state.copy(spreadsheetState = sh.copy(activeRow = (sh.activeRow + 1).coerceAtMost(14)))
+      CalcKey.DOWN -> state.copy(spreadsheetState = sh.copy(activeRow = (sh.activeRow + 1).coerceAtMost(44)))
       CalcKey.PAGE_UP -> state.copy(spreadsheetState = sh.copy(activeRow = (sh.activeRow - 5).coerceAtLeast(0)))
-      CalcKey.PAGE_DOWN -> state.copy(spreadsheetState = sh.copy(activeRow = (sh.activeRow + 5).coerceAtMost(14)))
+      CalcKey.PAGE_DOWN -> state.copy(spreadsheetState = sh.copy(activeRow = (sh.activeRow + 5).coerceAtMost(44)))
       CalcKey.OK -> {
         val curRaw = sh.cells[sh.cellName()] ?: ""
         state.copy(spreadsheetState = sh.copy(editing = true, editBuffer = curRaw))
@@ -841,7 +989,10 @@ object ModeKeyHandler {
         state.copy(spreadsheetState = sh.copy(cells = newCells, evaluated = AdvancedMathSolvers.evaluateSpreadsheet(newCells)))
       }
       CalcKey.EQ -> state.copy(spreadsheetState = sh.copy(editing = true, editBuffer = "="))
-      CalcKey.D0, CalcKey.D1, CalcKey.D2, CalcKey.D3, CalcKey.D4, CalcKey.D5, CalcKey.D6, CalcKey.D7, CalcKey.D8, CalcKey.D9, CalcKey.DOT, CalcKey.NEG -> {
+      CalcKey.PAREN_OPEN -> if (isShift) state.copy(spreadsheetState = sh.copy(editing = true, editBuffer = "=")) else state
+      CalcKey.SUB -> if (isShift) state.copy(spreadsheetState = sh.copy(editing = true, editBuffer = "-")) else state
+      CalcKey.NEG -> if (isShift) state else state.copy(spreadsheetState = sh.copy(editing = true, editBuffer = "-"))
+      CalcKey.D0, CalcKey.D1, CalcKey.D2, CalcKey.D3, CalcKey.D4, CalcKey.D5, CalcKey.D6, CalcKey.D7, CalcKey.D8, CalcKey.D9, CalcKey.DOT -> {
         val ch = appendNumericKey("", key, isShift) ?: ""
         state.copy(spreadsheetState = sh.copy(editing = true, editBuffer = ch))
       }
@@ -915,72 +1066,191 @@ object ModeKeyHandler {
     }
   }
 
-  // --- MATH BOX MODE ---
+  // --- MATH BOX MODE (All 4 official fx-991LA CW tools: Dice, Coin, Number Line, Circle) ---
   private fun handleMathBoxKey(state: CalculatorUiState, key: CalcKey, isShift: Boolean): CalculatorUiState? {
     val mb = state.mathBoxState
     return when (mb.phase) {
-      MathBoxState.Phase.SELECT_TYPE -> when (key) {
-        CalcKey.UP, CalcKey.D1 -> state.copy(mathBoxState = mb.copy(type = MathBoxType.DICE, phase = if (key == CalcKey.D1) MathBoxState.Phase.PARAMS else MathBoxState.Phase.SELECT_TYPE, activeParam = 0, inputBuffer = ""))
-        CalcKey.DOWN, CalcKey.D2 -> state.copy(mathBoxState = mb.copy(type = MathBoxType.COIN, phase = if (key == CalcKey.D2) MathBoxState.Phase.PARAMS else MathBoxState.Phase.SELECT_TYPE, activeParam = 0, inputBuffer = ""))
-        CalcKey.OK, CalcKey.EXE -> state.copy(mathBoxState = mb.copy(phase = MathBoxState.Phase.PARAMS, activeParam = 0, inputBuffer = ""))
-        else -> state
-      }
-      MathBoxState.Phase.PARAMS -> {
-        fun commit(s: CalculatorUiState): CalculatorUiState {
-          val m = s.mathBoxState
-          if (m.inputBuffer.isEmpty()) return s
-          val num = m.inputBuffer.toIntOrNull() ?: 1
-          return if (m.activeParam == 0) {
-            s.copy(mathBoxState = m.copy(objectCount = num.coerceIn(1, 3), inputBuffer = ""))
-          } else {
-            s.copy(mathBoxState = m.copy(trials = num.coerceIn(1, 250), inputBuffer = ""))
-          }
-        }
-        fun simulate(s: CalculatorUiState): CalculatorUiState {
-          val m = s.mathBoxState
-          val counts = mutableMapOf<Int, Int>()
-          repeat(m.trials) {
-            var sum = 0
-            repeat(m.objectCount) {
-              sum += if (m.type == MathBoxType.DICE) Random.nextInt(1, 7) else Random.nextInt(0, 2)
-            }
-            counts[sum] = (counts[sum] ?: 0) + 1
-          }
-          return s.copy(mathBoxState = m.copy(phase = MathBoxState.Phase.RESULTS, counts = counts.toSortedMap()))
-        }
+      MathBoxState.Phase.SELECT_TYPE -> {
+        val total = MathBoxType.entries.size
+        val curIdx = mb.type.ordinal
         when (key) {
-          CalcKey.UP -> commit(state).let { s -> s.copy(mathBoxState = s.mathBoxState.copy(activeParam = 0)) }
-          CalcKey.DOWN -> commit(state).let { s -> s.copy(mathBoxState = s.mathBoxState.copy(activeParam = 1)) }
-          CalcKey.OK -> {
-            val s = commit(state)
-            if (s.mathBoxState.activeParam == 0) s.copy(mathBoxState = s.mathBoxState.copy(activeParam = 1))
-            else simulate(s)
+          CalcKey.UP -> state.copy(mathBoxState = mb.copy(type = MathBoxType.entries[(curIdx - 1 + total) % total]))
+          CalcKey.DOWN -> state.copy(mathBoxState = mb.copy(type = MathBoxType.entries[(curIdx + 1) % total]))
+          CalcKey.D1 -> selectMathBoxType(state, MathBoxType.DICE)
+          CalcKey.D2 -> selectMathBoxType(state, MathBoxType.COIN)
+          CalcKey.D3 -> selectMathBoxType(state, MathBoxType.NUMBER_LINE)
+          CalcKey.D4 -> selectMathBoxType(state, MathBoxType.CIRCLE)
+          CalcKey.OK, CalcKey.EXE -> selectMathBoxType(state, mb.type)
+          else -> state
+        }
+      }
+      MathBoxState.Phase.PARAMS -> when (mb.type) {
+        MathBoxType.DICE, MathBoxType.COIN -> {
+          fun commit(s: CalculatorUiState): CalculatorUiState {
+            val m = s.mathBoxState
+            if (m.inputBuffer.isEmpty()) return s
+            val num = m.inputBuffer.toIntOrNull() ?: 1
+            return if (m.activeParam == 0) {
+              s.copy(mathBoxState = m.copy(objectCount = num.coerceIn(1, 3), inputBuffer = ""))
+            } else {
+              s.copy(mathBoxState = m.copy(trials = num.coerceIn(1, 250), inputBuffer = ""))
+            }
           }
-          CalcKey.EXE -> simulate(commit(state))
-          CalcKey.BACK -> state.copy(mathBoxState = mb.copy(phase = MathBoxState.Phase.SELECT_TYPE))
-          else -> {
-            val next = appendNumericKey(mb.inputBuffer, key, isShift) ?: return state
-            state.copy(mathBoxState = mb.copy(inputBuffer = next))
+          when (key) {
+            CalcKey.UP -> commit(state).let { s -> s.copy(mathBoxState = s.mathBoxState.copy(activeParam = 0)) }
+            CalcKey.DOWN -> commit(state).let { s -> s.copy(mathBoxState = s.mathBoxState.copy(activeParam = 1)) }
+            CalcKey.OK -> {
+              val s = commit(state)
+              if (s.mathBoxState.activeParam == 0) s.copy(mathBoxState = s.mathBoxState.copy(activeParam = 1))
+              else simulateDiceCoin(s)
+            }
+            CalcKey.EXE -> simulateDiceCoin(commit(state))
+            CalcKey.BACK -> state.copy(mathBoxState = mb.copy(phase = MathBoxState.Phase.SELECT_TYPE))
+            else -> {
+              val next = appendNumericKey(mb.inputBuffer, key, isShift) ?: return state
+              state.copy(mathBoxState = mb.copy(inputBuffer = next))
+            }
+          }
+        }
+        MathBoxType.NUMBER_LINE -> {
+          val slot = mb.nlActiveSlot.coerceIn(0, 2)
+          fun commitNlVal(s: CalculatorUiState): CalculatorUiState {
+            val m = s.mathBoxState
+            if (m.inputBuffer.isEmpty()) return s.copy(mathBoxState = m.copy(nlEditingValue = false))
+            val parsed = m.inputBuffer.toDoubleOrNull() ?: m.nlEntries[slot].value
+            val upd = m.nlEntries.mapIndexed { idx, e -> if (idx == slot) e.copy(value = parsed, enabled = true) else e }
+            return s.copy(mathBoxState = m.copy(nlEntries = upd, inputBuffer = "", nlEditingValue = false))
+          }
+          when (key) {
+            CalcKey.UP -> commitNlVal(state).let { s -> s.copy(mathBoxState = s.mathBoxState.copy(nlActiveSlot = (slot - 1).coerceAtLeast(0))) }
+            CalcKey.DOWN -> commitNlVal(state).let { s -> s.copy(mathBoxState = s.mathBoxState.copy(nlActiveSlot = (slot + 1).coerceAtMost(2))) }
+            CalcKey.LEFT, CalcKey.RIGHT -> {
+              val s = commitNlVal(state)
+              val curOp = s.mathBoxState.nlEntries[slot].op
+              val ops = NumberLineOp.entries
+              val dir = if (key == CalcKey.RIGHT) 1 else -1
+              val nextOp = ops[(curOp.ordinal + dir + ops.size) % ops.size]
+              val upd = s.mathBoxState.nlEntries.mapIndexed { idx, e -> if (idx == slot) e.copy(op = nextOp, enabled = true) else e }
+              s.copy(mathBoxState = s.mathBoxState.copy(nlEntries = upd))
+            }
+            CalcKey.OK -> {
+              val s = commitNlVal(state)
+              val upd = s.mathBoxState.nlEntries.mapIndexed { idx, e -> if (idx == slot) e.copy(enabled = !e.enabled) else e }
+              s.copy(mathBoxState = s.mathBoxState.copy(nlEntries = upd))
+            }
+            CalcKey.EXE -> {
+              val s = commitNlVal(state)
+              s.copy(mathBoxState = s.mathBoxState.copy(phase = MathBoxState.Phase.RESULTS))
+            }
+            CalcKey.BACK -> state.copy(mathBoxState = mb.copy(phase = MathBoxState.Phase.SELECT_TYPE, inputBuffer = ""))
+            else -> {
+              val next = appendNumericKey(mb.inputBuffer, key, isShift) ?: return state
+              state.copy(mathBoxState = mb.copy(inputBuffer = next, nlEditingValue = true))
+            }
+          }
+        }
+        MathBoxType.CIRCLE -> {
+          when (key) {
+            CalcKey.LEFT -> {
+              val modes = CircleModeType.entries
+              val nextMode = modes[(mb.circleMode.ordinal - 1 + modes.size) % modes.size]
+              state.copy(mathBoxState = mb.copy(circleMode = nextMode))
+            }
+            CalcKey.RIGHT -> {
+              val modes = CircleModeType.entries
+              val nextMode = modes[(mb.circleMode.ordinal + 1) % modes.size]
+              state.copy(mathBoxState = mb.copy(circleMode = nextMode))
+            }
+            CalcKey.OK, CalcKey.EXE -> {
+              val angle = mb.inputBuffer.toIntOrNull()?.let { ((it % 360) + 360) % 360 } ?: mb.circleAngleDeg
+              state.copy(mathBoxState = mb.copy(circleAngleDeg = angle, inputBuffer = "", phase = MathBoxState.Phase.RESULTS))
+            }
+            CalcKey.BACK -> state.copy(mathBoxState = mb.copy(phase = MathBoxState.Phase.SELECT_TYPE, inputBuffer = ""))
+            else -> {
+              val next = appendNumericKey(mb.inputBuffer, key, isShift) ?: return state
+              state.copy(mathBoxState = mb.copy(inputBuffer = next))
+            }
           }
         }
       }
-      MathBoxState.Phase.RESULTS -> when (key) {
-        CalcKey.EXE, CalcKey.OK -> {
-          // Re-roll!
-          val counts = mutableMapOf<Int, Int>()
-          repeat(mb.trials) {
-            var sum = 0
-            repeat(mb.objectCount) {
-              sum += if (mb.type == MathBoxType.DICE) Random.nextInt(1, 7) else Random.nextInt(0, 2)
-            }
-            counts[sum] = (counts[sum] ?: 0) + 1
-          }
-          state.copy(mathBoxState = mb.copy(counts = counts.toSortedMap()))
+      MathBoxState.Phase.RESULTS -> when (mb.type) {
+        MathBoxType.DICE, MathBoxType.COIN -> when (key) {
+          CalcKey.EXE, CalcKey.OK -> simulateDiceCoin(state)
+          CalcKey.LEFT, CalcKey.RIGHT -> state.copy(mathBoxState = mb.copy(diceShowList = !mb.diceShowList))
+          CalcKey.BACK, CalcKey.AC -> state.copy(mathBoxState = mb.copy(phase = MathBoxState.Phase.PARAMS, activeParam = 0))
+          else -> state
         }
-        CalcKey.BACK, CalcKey.AC -> state.copy(mathBoxState = mb.copy(phase = MathBoxState.Phase.PARAMS, activeParam = 0))
-        else -> state
+        MathBoxType.NUMBER_LINE -> when (key) {
+          CalcKey.LEFT -> state.copy(mathBoxState = mb.copy(nlPanOffset = mb.nlPanOffset - 1.0 / mb.nlZoom))
+          CalcKey.RIGHT -> state.copy(mathBoxState = mb.copy(nlPanOffset = mb.nlPanOffset + 1.0 / mb.nlZoom))
+          CalcKey.UP, CalcKey.ADD -> state.copy(mathBoxState = mb.copy(nlZoom = (mb.nlZoom * 1.5).coerceAtMost(8.0)))
+          CalcKey.DOWN, CalcKey.SUB -> state.copy(mathBoxState = mb.copy(nlZoom = (mb.nlZoom / 1.5).coerceAtLeast(0.25)))
+          CalcKey.BACK, CalcKey.AC -> state.copy(mathBoxState = mb.copy(phase = MathBoxState.Phase.PARAMS))
+          else -> state
+        }
+        MathBoxType.CIRCLE -> {
+          val maxDeg = if (mb.circleMode == CircleModeType.HALF) 180 else 360
+          when (key) {
+            CalcKey.LEFT -> {
+              val next = if (mb.circleMode == CircleModeType.HALF) {
+                (mb.circleAngleDeg + mb.circleStepDeg).coerceIn(0, 180)
+              } else {
+                (mb.circleAngleDeg + mb.circleStepDeg) % 360
+              }
+              state.copy(mathBoxState = mb.copy(circleAngleDeg = next))
+            }
+            CalcKey.RIGHT -> {
+              val next = if (mb.circleMode == CircleModeType.HALF) {
+                (mb.circleAngleDeg - mb.circleStepDeg).coerceIn(0, 180)
+              } else {
+                ((mb.circleAngleDeg - mb.circleStepDeg) + 360) % 360
+              }
+              state.copy(mathBoxState = mb.copy(circleAngleDeg = next))
+            }
+            CalcKey.UP, CalcKey.DOWN -> {
+              val modes = CircleModeType.entries
+              val dir = if (key == CalcKey.DOWN) 1 else -1
+              val nextMode = modes[(mb.circleMode.ordinal + dir + modes.size) % modes.size]
+              val clampedAngle = if (nextMode == CircleModeType.HALF) mb.circleAngleDeg.coerceIn(0, 180) else mb.circleAngleDeg % maxDeg
+              state.copy(mathBoxState = mb.copy(circleMode = nextMode, circleAngleDeg = clampedAngle))
+            }
+            CalcKey.OK -> {
+              val steps = listOf(15, 30, 45, 5)
+              val nextStep = steps[(steps.indexOf(mb.circleStepDeg) + 1) % steps.size]
+              state.copy(mathBoxState = mb.copy(circleStepDeg = nextStep), toastBanner = "Paso: ${nextStep}°")
+            }
+            CalcKey.BACK, CalcKey.AC -> state.copy(mathBoxState = mb.copy(phase = MathBoxState.Phase.PARAMS))
+            else -> state
+          }
+        }
       }
     }
+  }
+
+  private fun selectMathBoxType(state: CalculatorUiState, type: MathBoxType): CalculatorUiState {
+    val nextPhase = if (type == MathBoxType.CIRCLE) MathBoxState.Phase.RESULTS else MathBoxState.Phase.PARAMS
+    return state.copy(mathBoxState = state.mathBoxState.copy(type = type, phase = nextPhase, activeParam = 0, inputBuffer = ""))
+  }
+
+  private fun simulateDiceCoin(state: CalculatorUiState): CalculatorUiState {
+    val m = state.mathBoxState
+    val counts = mutableMapOf<Int, Int>()
+    val samples = mutableListOf<List<Int>>()
+    repeat(m.trials) {
+      val draw = List(m.objectCount) {
+        if (m.type == MathBoxType.DICE) Random.nextInt(1, 7) else Random.nextInt(0, 2)
+      }
+      val sum = draw.sum()
+      counts[sum] = (counts[sum] ?: 0) + 1
+      samples.add(draw)
+    }
+    return state.copy(
+      mathBoxState = m.copy(
+        phase = MathBoxState.Phase.RESULTS,
+        counts = counts.toSortedMap(),
+        rollSamples = samples,
+      )
+    )
   }
 
   private fun formatNumTrim(d: Double): String {

@@ -328,7 +328,21 @@ sealed class EvalResult {
   data class MatrixResult(val rows: Int, val cols: Int, val data: List<List<Double>>) : EvalResult()
   data class VectorResult(val data: List<Double>) : EvalResult()
   data class BaseNResult(val value: Int, val base: BaseNMode) : EvalResult()
-  data class VerifyResult(val isTrue: Boolean, val lhsSummary: String, val rhsSummary: String) : EvalResult()
+  data class VerifyResult(
+    val isTrue: Boolean,
+    val lhsSummary: String,
+    val rhsSummary: String,
+    val relationOp: String = "=",
+  ) : EvalResult()
+  data class UnreducedFraction(
+    val num: BigInteger,
+    val den: BigInteger,
+    val lastDivisor: Long? = null,
+  ) : EvalResult()
+  data class RemainderResult(
+    val quotient: Long,
+    val remainder: Long,
+  ) : EvalResult()
   data class ErrorResult(val title: String, val message: String) : EvalResult()
 }
 
@@ -356,12 +370,58 @@ fun formatRational(r: Rational, fractionFormat: FractionFormat): String {
   return "${r.num}/${r.den}"
 }
 
+fun formatRationalLinear(r: Rational, fractionFormat: FractionFormat): String {
+  if (r.isInteger) return r.num.toString()
+  if (fractionFormat == FractionFormat.MIXED && r.num.abs() > r.den) {
+    val neg = if (r.isNegative) "-" else ""
+    val whole = r.num.abs() / r.den
+    val rem = r.num.abs() % r.den
+    return "$neg$whole⌟$rem⌟${r.den}"
+  }
+  return "${r.num}⌟${r.den}"
+}
+
+fun formatExactRealLinear(value: ExactReal, settings: CalcSettings, fracFmt: FractionFormat = settings.fractionFormat): String {
+  return when (value) {
+    is ExactReal.Approx -> formatDoubleClassWiz(value.value, settings)
+    is ExactReal.PiMultiple -> {
+      val r = value.coeff.asRationalOrNull()
+      if (r != null) {
+        if (r.isZero) "0"
+        else if (r.isInteger) {
+          when (r.num) {
+            BigInteger.ONE -> "π"
+            BigInteger.valueOf(-1L) -> "-π"
+            else -> "${applyDigitGrouping(r.num.toString(), settings.digitSeparator)}π"
+          }
+        } else {
+          val neg = if (r.isNegative) "-" else ""
+          val absN = r.num.abs()
+          val numStr = if (absN == BigInteger.ONE) "π" else "${absN}π"
+          "$neg${numStr}⌟${r.den}"
+        }
+      } else {
+        "(${value.coeff.formatLatexLike(fracFmt).replace("/", "⌟")})π"
+      }
+    }
+    is ExactReal.Surd -> {
+      val r = value.value.asRationalOrNull()
+      if (r != null) {
+        if (r.isInteger) applyDigitGrouping(r.num.toString(), settings.digitSeparator)
+        else formatRationalLinear(r, fracFmt)
+      } else {
+        value.value.formatLatexLike(fracFmt).replace("/", "⌟")
+      }
+    }
+  }
+}
+
 fun primeFactorize(n: Long): String? {
-  if (n < 2L || n > 10_000_000_000L) return null
+  if (n < 2L || n > 9_999_999_999L) return null
   var rem = n
   val factors = mutableListOf<Pair<Long, Int>>()
   var d = 2L
-  while (d * d <= rem) {
+  while (d * d <= rem && d <= 1_018_081L) {
     if (rem % d == 0L) {
       var count = 0
       while (rem % d == 0L) {
@@ -372,10 +432,14 @@ fun primeFactorize(n: Long): String? {
     }
     d += if (d == 2L) 1L else 2L
   }
-  if (rem > 1L) factors.add(rem to 1)
-  return factors.joinToString("×") { (p, e) ->
+  val hasUnfactored = rem > 1L && d > 1_018_081L
+  if (rem > 1L && !hasUnfactored) factors.add(rem to 1)
+  val base = factors.joinToString("×") { (p, e) ->
     if (e == 1) "$p" else "$p${toSuperscript(e)}"
   }
+  return if (hasUnfactored) {
+    if (base.isEmpty()) "($rem)" else "$base×($rem)"
+  } else base
 }
 
 fun toSuperscript(n: Int): String {
@@ -397,44 +461,69 @@ fun formatSexagesimal(degVal: Double): String {
   return "$neg$d°$m'$sClean\""
 }
 
+fun applyDigitGrouping(raw: String, enabled: Boolean): String {
+  if (!enabled) return raw
+  val expIdx = raw.indexOf('×')
+  val mainPart = if (expIdx >= 0) raw.substring(0, expIdx) else raw
+  val suffix = if (expIdx >= 0) raw.substring(expIdx) else ""
+  val neg = if (mainPart.startsWith("-")) "-" else ""
+  val unsigned = mainPart.removePrefix("-")
+  val dotIdx = unsigned.indexOf('.')
+  val intPart = if (dotIdx >= 0) unsigned.substring(0, dotIdx) else unsigned
+  val fracPart = if (dotIdx >= 0) unsigned.substring(dotIdx) else ""
+  if (intPart.length <= 3 || !intPart.all { it.isDigit() }) return raw
+  val groupedInt = intPart.reversed().chunked(3).joinToString(" ").reversed()
+  return "$neg$groupedInt$fracPart$suffix"
+}
+
 fun formatDoubleClassWiz(v: Double, settings: CalcSettings, forceMode: ResultFormatMode? = null): String {
   if (v.isNaN() || v.isInfinite()) return "Math ERROR"
   val clean = if (abs(v) < 1e-14) 0.0 else v
   if (forceMode == ResultFormatMode.SEXAGESIMAL) return formatSexagesimal(clean)
-  if (forceMode == ResultFormatMode.ENGINEERING) {
-    if (clean == 0.0) return "0×10⁰"
-    val exp = floor(log10(abs(clean))).toInt()
-    val engExp = Math.floorDiv(exp, 3) * 3
-    val mant = clean / 10.0.pow(engExp.toDouble())
-    val mantStr = String.format(java.util.Locale.US, "%.6f", mant).trimEnd('0').trimEnd('.')
-    return "$mantStr×10${toSuperscript(engExp)}"
+  val raw = when {
+    forceMode == ResultFormatMode.ENGINEERING -> {
+      if (clean == 0.0) "0×10⁰"
+      else {
+        val exp = floor(log10(abs(clean))).toInt()
+        val engExp = Math.floorDiv(exp, 3) * 3
+        val mant = clean / 10.0.pow(engExp.toDouble())
+        val mantStr = String.format(java.util.Locale.US, "%.6f", mant).trimEnd('0').trimEnd('.')
+        "$mantStr×10${toSuperscript(engExp)}"
+      }
+    }
+    forceMode == ResultFormatMode.SCIENTIFIC || settings.numberFormat == NumberFormatMode.SCI -> {
+      val digits = settings.sciDigits.coerceIn(0, 9)
+      if (clean == 0.0) "0"
+      else {
+        val exp = floor(log10(abs(clean))).toInt()
+        val mant = clean / 10.0.pow(exp.toDouble())
+        val mantStr = String.format(java.util.Locale.US, "%.${digits}f", mant)
+        "$mantStr×10${toSuperscript(exp)}"
+      }
+    }
+    settings.numberFormat == NumberFormatMode.FIX -> {
+      val digits = settings.fixDigits.coerceIn(0, 9)
+      String.format(java.util.Locale.US, "%.${digits}f", clean)
+    }
+    else -> {
+      val normLimit = if (settings.numberFormat == NumberFormatMode.NORM_2) 1e-9 else 1e-2
+      if (clean != 0.0 && (abs(clean) >= 1e10 || abs(clean) < normLimit)) {
+        val exp = floor(log10(abs(clean))).toInt()
+        val mant = clean / 10.0.pow(exp.toDouble())
+        val mantStr = String.format(java.util.Locale.US, "%.9f", mant).trimEnd('0').trimEnd('.')
+        "$mantStr×10${toSuperscript(exp)}"
+      } else {
+        val rounded = String.format(java.util.Locale.US, "%.10g", clean).toDouble()
+        if (abs(rounded - round(rounded)) < 1e-11 && abs(rounded) < 1e12) {
+          round(rounded).toLong().toString()
+        } else {
+          val s = String.format(java.util.Locale.US, "%.10f", clean).trimEnd('0').trimEnd('.')
+          if (s == "-0") "0" else s
+        }
+      }
+    }
   }
-  if (forceMode == ResultFormatMode.SCIENTIFIC || settings.numberFormat == NumberFormatMode.SCI) {
-    val digits = settings.sciDigits.coerceIn(0, 9)
-    if (clean == 0.0) return "0"
-    val exp = floor(log10(abs(clean))).toInt()
-    val mant = clean / 10.0.pow(exp.toDouble())
-    val mantStr = String.format(java.util.Locale.US, "%.${digits}f", mant)
-    return "$mantStr×10${toSuperscript(exp)}"
-  }
-  if (settings.numberFormat == NumberFormatMode.FIX) {
-    val digits = settings.fixDigits.coerceIn(0, 9)
-    return String.format(java.util.Locale.US, "%.${digits}f", clean)
-  }
-  // Norm 1 / Norm 2
-  val normLimit = if (settings.numberFormat == NumberFormatMode.NORM_2) 1e-9 else 1e-2
-  if (clean != 0.0 && (abs(clean) >= 1e10 || abs(clean) < normLimit)) {
-    val exp = floor(log10(abs(clean))).toInt()
-    val mant = clean / 10.0.pow(exp.toDouble())
-    val mantStr = String.format(java.util.Locale.US, "%.9f", mant).trimEnd('0').trimEnd('.')
-    return "$mantStr×10${toSuperscript(exp)}"
-  }
-  val rounded = String.format(java.util.Locale.US, "%.10g", clean).toDouble()
-  if (abs(rounded - round(rounded)) < 1e-11 && abs(rounded) < 1e12) {
-    return round(rounded).toLong().toString()
-  }
-  val s = String.format(java.util.Locale.US, "%.10f", clean).trimEnd('0').trimEnd('.')
-  return if (s == "-0") "0" else s
+  return applyDigitGrouping(raw, settings.digitSeparator)
 }
 
 /**

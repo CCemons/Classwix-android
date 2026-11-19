@@ -19,6 +19,8 @@ data class EvalContext(
   val ans: EvalResult? = null,
   val preAns: EvalResult? = null,
   val statSummary: StatSummary? = null,
+  val statModel: StatModelType = StatModelType.ONE_VAR,
+  val verifyModeEnabled: Boolean = false,
   val fExpr: MathRow? = null,
   val gExpr: MathRow? = null,
   val recursionDepth: Int = 0,
@@ -59,23 +61,12 @@ object ScientificEvaluator {
         val v = evalBaseNRow(row, ctx)
         return EvalResult.BaseNResult(v, ctx.baseNMode)
       }
-      val verifyOp = findTopLevelVerifyOp(row)
-      if (verifyOp != null) {
-        val (opIdx, opCode) = verifyOp
-        val lhs = MathRow(row.items.subList(0, opIdx))
-        val rhs = MathRow(row.items.subList(opIdx + 1, row.items.size))
-        if (lhs.isEmpty() || rhs.isEmpty()) throw CalcSyntaxException()
-        val lhsRes = evaluate(lhs, ctx)
-        if (lhsRes is EvalResult.ErrorResult) return lhsRes
-        val rhsRes = evaluate(rhs, ctx)
-        if (rhsRes is EvalResult.ErrorResult) return rhsRes
-        val isEq = areResultsEqual(lhsRes, rhsRes)
-        val isTrue = if (opCode == "=") isEq else !isEq
-        return EvalResult.VerifyResult(
-          isTrue = isTrue,
-          lhsSummary = summarizeEvalResult(lhsRes, ctx.settings),
-          rhsSummary = summarizeEvalResult(rhsRes, ctx.settings),
-        )
+      val verifyResult = evaluateVerifyChain(row, ctx)
+      if (verifyResult != null) {
+        return verifyResult
+      }
+      if (ctx.settings.simplifyMode == SimplifyMode.MANUAL && ctx.mode == CalcMode.CALCULATE) {
+        tryManualFraction(row, ctx)?.let { return it }
       }
       val parser = RowParser(row, ctx)
       val res = parser.parseExpression()
@@ -102,6 +93,8 @@ object ScientificEvaluator {
       is EvalResult.ComplexResult -> {
         if (abs(r.im.toDouble()) < 1e-12) r.re.toDouble() else throw CalcMathException()
       }
+      is EvalResult.UnreducedFraction -> r.num.toDouble() / r.den.toDouble()
+      is EvalResult.RemainderResult -> r.quotient.toDouble()
       is EvalResult.ErrorResult -> throw CalcMathException(r.title)
       else -> throw CalcMathException()
     }
@@ -314,6 +307,16 @@ object ScientificEvaluator {
             consume()
             val right = parsePermComb()
             left = divResults(left, right)
+          }
+          code == "÷R" -> {
+            consume()
+            val right = parsePermComb()
+            val a = expectRealDouble(left)
+            val b = expectRealDouble(right)
+            val aLong = round(a).toLong()
+            val bLong = round(b).toLong()
+            if (bLong == 0L || abs(a - aLong) > 1e-9 || abs(b - bLong) > 1e-9) throw CalcMathException()
+            left = EvalResult.RemainderResult(aLong / bLong, aLong % bLong)
           }
           code == "Mod" -> {
             consume()
@@ -824,6 +827,16 @@ object ScientificEvaluator {
             else -> r
           }
         }
+        "x̂(" -> {
+          val y = expectRealDouble(need1())
+          val sum = ctx.statSummary ?: throw CalcMathException()
+          EvalResult.RealResult(ExactReal.fromDouble(AdvancedMathSolvers.predictStatX(ctx.statModel, sum, y)))
+        }
+        "ŷ(" -> {
+          val x = expectRealDouble(need1())
+          val sum = ctx.statSummary ?: throw CalcMathException()
+          EvalResult.RealResult(ExactReal.fromDouble(AdvancedMathSolvers.predictStatY(ctx.statModel, sum, x)))
+        }
         else -> throw CalcSyntaxException()
       }
     }
@@ -860,10 +873,23 @@ object ScientificEvaluator {
         "Σx²" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.sumX2 ?: 0.0))
         "σx" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.sigmaX ?: 0.0))
         "sx" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.sX ?: 0.0))
+        "min(x)" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.minX ?: 0.0))
+        "Q₁" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.q1 ?: 0.0))
+        "Med" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.med ?: 0.0))
+        "Q₃" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.q3 ?: 0.0))
+        "max(x)" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.maxX ?: 0.0))
         "n" -> EvalResult.RealResult(ExactReal.fromDouble((ctx.statSummary?.n ?: 0).toDouble()))
         "ȳ" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.meanY ?: 0.0))
         "Σy" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.sumY ?: 0.0))
+        "Σy²" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.sumY2 ?: 0.0))
+        "σy" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.sigmaY ?: 0.0))
+        "sy" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.sY ?: 0.0))
         "Σxy" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.sumXY ?: 0.0))
+        "a" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.regA ?: 0.0))
+        "b" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.regB ?: 0.0))
+        "c" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.regC ?: 0.0))
+        "r" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.regR ?: 0.0))
+        "r²" -> EvalResult.RealResult(ExactReal.fromDouble(ctx.statSummary?.regR2 ?: 0.0))
         else -> ctx.variables[code] ?: EvalResult.RealResult(ExactReal.ZERO)
       }
     }
@@ -1374,25 +1400,152 @@ object ScientificEvaluator {
     return (-fP2 + 8.0 * fP1 - 8.0 * fM1 + fM2) / (12.0 * h)
   }
 
-  private fun findTopLevelVerifyOp(row: MathRow): Pair<Int, String>? {
+  private val verifyOperators = setOf("=", "≠", "<", ">", "≤", "≥")
+
+  private fun evaluateVerifyChain(row: MathRow, ctx: EvalContext): EvalResult? {
     var depth = 0
-    var found: Pair<Int, String>? = null
+    val opPositions = mutableListOf<Pair<Int, String>>()
     row.items.forEachIndexed { idx, el ->
       if (el is MathElement.Token) {
         when (el.kind) {
           TokenKind.PAREN_OPEN, TokenKind.FUNC_OPEN -> depth++
           TokenKind.PAREN_CLOSE -> if (depth > 0) depth--
-          TokenKind.OPERATOR -> {
-            if (depth == 0 && (el.evalCode == "=" || el.evalCode == "≠")) {
-              if (found != null) throw CalcSyntaxException()
-              found = idx to el.evalCode
+          TokenKind.OPERATOR, TokenKind.LOGIC_OP -> {
+            if (depth == 0 && el.evalCode in verifyOperators) {
+              opPositions.add(idx to el.evalCode)
             }
           }
           else -> {}
         }
       }
     }
-    return found
+    if (opPositions.isEmpty()) return null
+
+    // Extract segments between comparison operators
+    val segmentRows = mutableListOf<MathRow>()
+    var start = 0
+    for ((opIdx, _) in opPositions) {
+      val sub = MathRow(row.items.subList(start, opIdx))
+      if (sub.isEmpty()) throw CalcSyntaxException()
+      segmentRows.add(sub)
+      start = opIdx + 1
+    }
+    val tail = MathRow(row.items.subList(start, row.items.size))
+    if (tail.isEmpty()) throw CalcSyntaxException()
+    segmentRows.add(tail)
+
+    val evalCtx = ctx.copy(settings = ctx.settings.copy(simplifyMode = SimplifyMode.AUTO))
+    val evalSegs = segmentRows.map { seg ->
+      val r = evaluate(seg, evalCtx)
+      if (r is EvalResult.ErrorResult) return r
+      r
+    }
+
+    var allHold = true
+    for (i in opPositions.indices) {
+      val op = opPositions[i].second
+      val a = evalSegs[i]
+      val b = evalSegs[i + 1]
+      val holds = when (op) {
+        "=" -> areResultsEqual(a, b)
+        "≠" -> !areResultsEqual(a, b)
+        "<" -> expectRealDouble(a) < expectRealDouble(b) - 1e-11
+        ">" -> expectRealDouble(a) > expectRealDouble(b) + 1e-11
+        "≤" -> {
+          val da = expectRealDouble(a); val db = expectRealDouble(b)
+          da < db || approxEqual(da, db)
+        }
+        "≥" -> {
+          val da = expectRealDouble(a); val db = expectRealDouble(b)
+          da > db || approxEqual(da, db)
+        }
+        else -> throw CalcSyntaxException()
+      }
+      if (!holds) allHold = false
+    }
+
+    return EvalResult.VerifyResult(
+      isTrue = allHold,
+      lhsSummary = summarizeEvalResult(evalSegs.first(), ctx.settings),
+      rhsSummary = summarizeEvalResult(evalSegs.last(), ctx.settings),
+      relationOp = opPositions.joinToString("..") { it.second },
+    )
+  }
+
+  private fun tryManualFraction(row: MathRow, ctx: EvalContext): EvalResult.UnreducedFraction? {
+    val autoCtx = ctx.copy(settings = ctx.settings.copy(simplifyMode = SimplifyMode.AUTO))
+    val (numRow, denRow) = when {
+      row.items.size == 1 && row.items[0] is MathElement.Fraction -> {
+        val f = row.items[0] as MathElement.Fraction
+        f.numerator to f.denominator
+      }
+      else -> {
+        // Check single top-level ÷
+        var depth = 0
+        var divIdx: Int? = null
+        row.items.forEachIndexed { idx, el ->
+          if (el is MathElement.Token) {
+            when (el.kind) {
+              TokenKind.PAREN_OPEN, TokenKind.FUNC_OPEN -> depth++
+              TokenKind.PAREN_CLOSE -> if (depth > 0) depth--
+              TokenKind.OPERATOR -> if (depth == 0 && (el.evalCode == "÷" || el.evalCode == "/")) {
+                if (divIdx != null) return null
+                divIdx = idx
+              }
+              else -> {}
+            }
+          }
+        }
+        val dIdx = divIdx ?: return null
+        MathRow(row.items.subList(0, dIdx)) to MathRow(row.items.subList(dIdx + 1, row.items.size))
+      }
+    }
+    if (numRow.isEmpty() || denRow.isEmpty()) return null
+    val numRes = evaluate(numRow, autoCtx) as? EvalResult.RealResult ?: return null
+    val denRes = evaluate(denRow, autoCtx) as? EvalResult.RealResult ?: return null
+    val nRat = (numRes.value as? ExactReal.Surd)?.value?.asRationalOrNull() ?: return null
+    val dRat = (denRes.value as? ExactReal.Surd)?.value?.asRationalOrNull() ?: return null
+    if (!nRat.isInteger || !dRat.isInteger || dRat.isZero) return null
+    var n = nRat.num
+    var d = dRat.num
+    if (d < BigInteger.ZERO) {
+      n = -n
+      d = -d
+    }
+    if (d == BigInteger.ONE || n.abs().gcd(d) <= BigInteger.ONE) return null
+    return EvalResult.UnreducedFraction(n, d)
+  }
+
+  fun simplifyFractionStep(frac: EvalResult.UnreducedFraction, divisor: Long? = null): EvalResult {
+    val g = frac.num.abs().gcd(frac.den)
+    if (g <= BigInteger.ONE) {
+      return EvalResult.RealResult(ExactReal.fromRational(Rational(frac.num, frac.den)))
+    }
+    val chosen: BigInteger = if (divisor != null && divisor > 1L) {
+      val divBi = BigInteger.valueOf(divisor)
+      if (frac.num.remainder(divBi) != BigInteger.ZERO || frac.den.remainder(divBi) != BigInteger.ZERO) {
+        return EvalResult.ErrorResult("Math ERROR", "No divisible por $divisor")
+      }
+      divBi
+    } else {
+      // Pick smallest prime factor of gcd(num, den) for authentic ClassWiz step-by-step simplification
+      val gLong = g.toLong()
+      var p = 2L
+      var found = gLong
+      while (p * p <= gLong) {
+        if (gLong % p == 0L) { found = p; break }
+        p += if (p == 2L) 1L else 2L
+      }
+      BigInteger.valueOf(found)
+    }
+    val newNum = frac.num / chosen
+    val newDen = frac.den / chosen
+    val remGcd = newNum.abs().gcd(newDen)
+    return if (remGcd <= BigInteger.ONE || newDen == BigInteger.ONE) {
+      EvalResult.RealResult(ExactReal.fromRational(Rational.normalize(newNum, newDen)))
+    } else {
+      EvalResult.UnreducedFraction(newNum, newDen, chosen.toLong())
+    }
   }
 
   private fun approxEqual(a: Double, b: Double): Boolean {
@@ -1427,6 +1580,7 @@ object ScientificEvaluator {
     is EvalResult.ComplexResult -> "${formatDoubleClassWiz(res.re.toDouble(), settings)}+${formatDoubleClassWiz(res.im.toDouble(), settings)}i"
     is EvalResult.MatrixResult -> "Mat(${res.rows}×${res.cols})"
     is EvalResult.VectorResult -> "Vct(${res.data.size})"
+    is EvalResult.RemainderResult -> "${res.quotient}, R=${res.remainder}"
     else -> ""
   }
 }

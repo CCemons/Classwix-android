@@ -65,6 +65,7 @@ data class TableState(
   val fDoc: EditorDocument = EditorDocument(),
   val gDoc: EditorDocument = EditorDocument(),
   val editingG: Boolean = false,
+  val showG: Boolean = true,
   val start: Double = 1.0,
   val end: Double = 5.0,
   val step: Double = 1.0,
@@ -72,6 +73,8 @@ data class TableState(
   val rows: List<TableRow> = emptyList(),
   val selectedRow: Int = 0,
   val selectedCol: Int = 0,
+  val editingXRow: Int? = null,
+  val editingXBuffer: String = "",
 ) {
   enum class Phase { EDIT_F, EDIT_G, RANGE_SETUP, RESULT_TABLE }
   data class TableRow(val x: Double, val fx: Double?, val gx: Double?)
@@ -88,6 +91,7 @@ data class EquationState(
   val inputBuffer: String = "",
   val linearResult: LinearSystemResult? = null,
   val polyRoots: List<ComplexNum> = emptyList(),
+  val polyVertex: PolyVertex? = null,
   val solverDoc: EditorDocument = EditorDocument(),
   val solverInitialX: Double = 0.0,
   val solverResult: Pair<Double, Double>? = null,
@@ -153,8 +157,10 @@ data class StatsAppState(
   val activeCol: Int = 0,
   val inputBuffer: String = "",
   val summary: StatSummary = StatSummary(),
+  val calcDoc: EditorDocument = EditorDocument(),
+  val calcResult: EvalResult? = null,
 ) {
-  enum class Phase { SELECT_MODEL, DATA_GRID, RESULTS }
+  enum class Phase { SELECT_MODEL, DATA_GRID, RESULTS, STAT_CALC }
 }
 
 enum class DistType(val labelEs: String, val labelEn: String) {
@@ -185,10 +191,20 @@ data class SpreadsheetState(
   val cells: Map<String, String> = emptyMap(),
   val evaluated: Map<String, Double?> = emptyMap(),
   val activeCol: Int = 0, // 0..4 -> A..E
-  val activeRow: Int = 0, // 0..14 -> 1..15
+  val activeRow: Int = 0, // 0..44 -> 1..45
   val editing: Boolean = false,
   val editBuffer: String = "",
+  val clipboardRaw: String? = null,
+  val clipboardSourceCol: Int = 0,
+  val clipboardSourceRow: Int = 0,
+  val clipboardIsCut: Boolean = false,
+  val subPhase: SubPhase = SubPhase.GRID,
+  val fillSourceRaw: String = "",
+  val fillRange: String = "A1:A5",
+  val fillField: Int = 0,
+  val fillBuffer: String = "",
 ) {
+  enum class SubPhase { GRID, FILL_FORMULA, FILL_VALUE }
   fun cellName(col: Int = activeCol, row: Int = activeRow): String = "${'A' + col}${row + 1}"
 }
 
@@ -208,6 +224,29 @@ data class RatioState(
 enum class MathBoxType(val labelEs: String, val labelEn: String) {
   DICE("Lanzam. dado", "Dice Roll"),
   COIN("Lanzam. moneda", "Coin Toss"),
+  NUMBER_LINE("Recta numérica", "Number Line"),
+  CIRCLE("Círculo", "Circle"),
+}
+
+enum class NumberLineOp(val symbol: String) {
+  LT("<"),
+  LE("≤"),
+  GT(">"),
+  GE("≥"),
+  EQ("="),
+}
+
+data class NumberLineEntry(
+  val label: String,
+  val enabled: Boolean,
+  val op: NumberLineOp,
+  val value: Double,
+)
+
+enum class CircleModeType(val labelEs: String, val labelEn: String) {
+  UNIT("Círculo unitario", "Unit Circle"),
+  HALF("Semicírculo", "Half Circle"),
+  CLOCK("Reloj", "Clock"),
 }
 
 data class MathBoxState(
@@ -218,6 +257,20 @@ data class MathBoxState(
   val activeParam: Int = 0,
   val inputBuffer: String = "",
   val counts: Map<Int, Int> = emptyMap(),
+  val diceShowList: Boolean = false,
+  val rollSamples: List<List<Int>> = emptyList(),
+  val nlEntries: List<NumberLineEntry> = listOf(
+    NumberLineEntry("A", true, NumberLineOp.LE, -1.5),
+    NumberLineEntry("B", true, NumberLineOp.GT, 1.0),
+    NumberLineEntry("C", false, NumberLineOp.EQ, 0.0),
+  ),
+  val nlActiveSlot: Int = 0,
+  val nlEditingValue: Boolean = false,
+  val nlPanOffset: Double = 0.0,
+  val nlZoom: Double = 1.0,
+  val circleMode: CircleModeType = CircleModeType.UNIT,
+  val circleAngleDeg: Int = 30,
+  val circleStepDeg: Int = 15,
 ) {
   enum class Phase { SELECT_TYPE, PARAMS, RESULTS }
 }
@@ -225,16 +278,21 @@ data class MathBoxState(
 data class CalculatorUiState(
   val isPoweredOn: Boolean = true,
   val isShiftActive: Boolean = false,
+  val insertOverwriteMode: Boolean = false,
   val storePending: Boolean = false,
+  val verifyModeEnabled: Boolean = false,
   val mode: CalcMode = CalcMode.CALCULATE,
   val overlay: OverlayScreen = OverlayScreen.NONE,
   val overlayCursor: Int = 0,
   val overlayStack: List<Pair<String, List<CatalogEntry>>> = emptyList(),
-  val settingsPage: Int = 0, // 0=root, 1=Calc Settings, 2=System Settings, 3=Reset, 4=Sub-option
+  val settingsPage: Int = 0, // 0=root, 1=Calc Settings, 2=System Settings, 3=Reset, 4=Sub-option, 5=Fix/Sci digits
   val settingsDetailKey: String = "",
   val settings: CalcSettings = CalcSettings(),
   val doc: EditorDocument = EditorDocument(),
   val undoStack: List<EditorDocument> = emptyList(),
+  val fxUndoStack: List<EditorDocument> = emptyList(),
+  val solverUndoStack: List<EditorDocument> = emptyList(),
+  val statCalcUndoStack: List<EditorDocument> = emptyList(),
   val currentResult: EvalResult? = null,
   val resultFormatOverride: ResultFormatMode? = null,
   val history: List<HistoryEntry> = emptyList(),

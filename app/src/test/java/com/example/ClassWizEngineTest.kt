@@ -114,8 +114,82 @@ class ClassWizEngineTest {
     assertEquals(10.0, fRes.value.toDouble(), 1e-10)
 
     // QR matrix dimensions should be odd >= 21 and non-empty
-    val qr = QrEncoder.encode("CASIO:991LACW:CALCULATE:2+3=5")
-    assertTrue(qr.size >= 21 && qr.size % 4 == 1)
+    val qr = QrEncoder.encode("CASIO:991LACW:CALCULATE:2+3=5", QrVersion.V3)
+    assertTrue(qr.size >= 29 && qr.size % 4 == 1)
     assertEquals(qr.size, qr.first().size)
+  }
+
+  @Test
+  fun chainedVerifyManualSimplifyLinearAndVertex() {
+    // Chained inequality: 3 < π < 4 -> TRUE
+    val chain = MathRow(listOf(
+      tok("3"), tok("<", TokenKind.OPERATOR), tok("π", TokenKind.CONSTANT),
+      tok("<", TokenKind.OPERATOR), tok("4")
+    ))
+    val chainRes = ScientificEvaluator.evaluate(chain, EvalContext()) as EvalResult.VerifyResult
+    assertTrue(chainRes.isTrue)
+    assertEquals("<..<", chainRes.relationOp)
+
+    // 5 ≥ 5 -> TRUE, 2 > 3 -> FALSE
+    val geRes = ScientificEvaluator.evaluate(
+      MathRow(listOf(tok("5"), tok("≥", TokenKind.OPERATOR), tok("5"))),
+      EvalContext()
+    ) as EvalResult.VerifyResult
+    assertTrue(geRes.isTrue)
+
+    // Manual simplification: 12/18 -> UnreducedFraction(12, 18) -> step ÷2 -> 6/9 -> step ÷3 -> 2/3
+    val fracRow = MathRow(listOf(
+      MathElement.Fraction(MathRow(listOf(tok("1"), tok("2"))), MathRow(listOf(tok("1"), tok("8"))))
+    ))
+    val manCtx = EvalContext(settings = CalcSettings(simplifyMode = SimplifyMode.MANUAL))
+    val u1 = ScientificEvaluator.evaluate(fracRow, manCtx) as EvalResult.UnreducedFraction
+    assertEquals(12L, u1.num.toLong())
+    assertEquals(18L, u1.den.toLong())
+
+    val u2 = ScientificEvaluator.simplifyFractionStep(u1) as EvalResult.UnreducedFraction
+    assertEquals(6L, u2.num.toLong())
+    assertEquals(9L, u2.den.toLong())
+    assertEquals(2L, u2.lastDivisor)
+
+    val finalRes = ScientificEvaluator.simplifyFractionStep(u2) as EvalResult.RealResult
+    assertEquals(Rational.of(2, 3), (finalRes.value as ExactReal.Surd).value.asRationalOrNull())
+
+    // Linear fraction output uses ClassWiz ⌟ symbol + digit grouping
+    val linearStr = formatExactRealLinear(
+      ExactReal.fromRational(Rational.of(7, 3)),
+      CalcSettings(fractionFormat = FractionFormat.MIXED)
+    )
+    assertEquals("2⌟1⌟3", linearStr)
+    assertEquals("1 234 567.89", applyDigitGrouping("1234567.89", true))
+
+    // Quadratic vertex: x^2 - 4x + 3 -> minimum at (2, -1)
+    val vertex = AdvancedMathSolvers.quadraticVertex(1.0, -4.0, 3.0)!!
+    assertTrue(vertex.isMinimum)
+    assertEquals(2.0, vertex.x, 1e-10)
+    assertEquals(-1.0, vertex.y, 1e-10)
+  }
+
+  @Test
+  fun spreadsheetAbsoluteRefsAndFillFormulaUpToRow45() {
+    val shifted = AdvancedMathSolvers.shiftFormulaReferences("=\$A\$1+B2+C\$3+\$D4", dCol = 1, dRow = 2)
+    assertEquals("=\$A\$1+C4+D\$3+\$D6", shifted)
+
+    val initial = mapOf("A1" to "10", "A2" to "20", "A3" to "30", "B1" to "2")
+    val filled = AdvancedMathSolvers.fillSpreadsheetFormula(
+      cells = initial,
+      sourceCol = 2,
+      sourceRow = 0,
+      formula = "=A1*\$B\$1",
+      rangeStr = "C1:C3",
+    )
+    assertEquals("=A1*\$B\$1", filled["C1"])
+    assertEquals("=A2*\$B\$1", filled["C2"])
+    assertEquals("=A3*\$B\$1", filled["C3"])
+
+    val evald = AdvancedMathSolvers.evaluateSpreadsheet(filled + ("E45" to "=SUM(C1:C3)"))
+    assertEquals(20.0, evald["C1"]!!, 1e-9)
+    assertEquals(40.0, evald["C2"]!!, 1e-9)
+    assertEquals(60.0, evald["C3"]!!, 1e-9)
+    assertEquals(120.0, evald["E45"]!!, 1e-9)
   }
 }

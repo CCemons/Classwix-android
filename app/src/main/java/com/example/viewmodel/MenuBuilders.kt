@@ -79,8 +79,72 @@ object MenuBuilders {
         )
         return list
       }
+      CalcMode.STATISTICS -> {
+        val statItems = mutableListOf<CatalogEntry>(
+          CatalogEntry.InsertAction("x̄ (Media x)", "x̄ (Mean x)", "", "var:x̄"),
+          CatalogEntry.InsertAction("Σx (Suma x)", "Σx (Sum x)", "", "var:Σx"),
+          CatalogEntry.InsertAction("Σx²", "Σx²", "", "var:Σx²"),
+          CatalogEntry.InsertAction("σx (Desv. pob.)", "σx (Pop. Std)", "", "var:σx"),
+          CatalogEntry.InsertAction("sx (Desv. muest.)", "sx (Samp. Std)", "", "var:sx"),
+          CatalogEntry.InsertAction("n (Datos)", "n (Count)", "", "var:n"),
+          CatalogEntry.InsertAction("min(x)", "min(x)", "", "var:min(x)"),
+          CatalogEntry.InsertAction("Q₁ (Cuartil 1)", "Q₁", "", "var:Q₁"),
+          CatalogEntry.InsertAction("Med (Mediana)", "Med (Median)", "", "var:Med"),
+          CatalogEntry.InsertAction("Q₃ (Cuartil 3)", "Q₃", "", "var:Q₃"),
+          CatalogEntry.InsertAction("max(x)", "max(x)", "", "var:max(x)"),
+        )
+        if (state.statsState.model != StatModelType.ONE_VAR) {
+          statItems += listOf(
+            CatalogEntry.InsertAction("ȳ (Media y)", "ȳ (Mean y)", "", "var:ȳ"),
+            CatalogEntry.InsertAction("Σy", "Σy", "", "var:Σy"),
+            CatalogEntry.InsertAction("Σy²", "Σy²", "", "var:Σy²"),
+            CatalogEntry.InsertAction("σy", "σy", "", "var:σy"),
+            CatalogEntry.InsertAction("sy", "sy", "", "var:sy"),
+            CatalogEntry.InsertAction("Σxy", "Σxy", "", "var:Σxy"),
+            CatalogEntry.InsertAction("a (Regresión)", "a (Regression)", "", "var:a"),
+            CatalogEntry.InsertAction("b (Regresión)", "b (Regression)", "", "var:b"),
+            CatalogEntry.InsertAction("c (Cuadrática)", "c (Quadratic)", "", "var:c"),
+            CatalogEntry.InsertAction("r (Correlación)", "r (Correlation)", "", "var:r"),
+            CatalogEntry.InsertAction("r² (Coef. det.)", "r²", "", "var:r²"),
+            CatalogEntry.InsertAction("x̂(y) (Estimar x)", "x̂(y)", "", "fn:x̂("),
+            CatalogEntry.InsertAction("ŷ(x) (Estimar y)", "ŷ(x)", "", "fn:ŷ("),
+          )
+        }
+        list += CatalogEntry.SubCategory("Variables Est.", "Stat Variables", "x̄, σx, regresión", statItems)
+      }
+      CalcMode.SPREADSHEET -> {
+        list += CatalogEntry.SubCategory(
+          "Fórmulas Hoja", "Sheet Formulas", "SUM, MEAN, MIN, MAX",
+          listOf(
+            CatalogEntry.InsertAction("=SUM( )", "=SUM( )", "Suma de rango", "sheet:ins:=SUM("),
+            CatalogEntry.InsertAction("=MEAN( )", "=MEAN( )", "Promedio de rango", "sheet:ins:=MEAN("),
+            CatalogEntry.InsertAction("=MIN( )", "=MIN( )", "Mínimo de rango", "sheet:ins:=MIN("),
+            CatalogEntry.InsertAction("=MAX( )", "=MAX( )", "Máximo de rango", "sheet:ins:=MAX("),
+            CatalogEntry.InsertAction("$ (Ref. absoluta)", "$ (Abs Ref)", "Ej: \$A\$1", "sheet:ins:$"),
+            CatalogEntry.InsertAction(": (Rango)", ": (Range)", "Ej: A1:A5", "sheet:ins::"),
+            CatalogEntry.InsertAction("Columna A", "Column A", "", "sheet:ins:A"),
+            CatalogEntry.InsertAction("Columna B", "Column B", "", "sheet:ins:B"),
+            CatalogEntry.InsertAction("Columna C", "Column C", "", "sheet:ins:C"),
+            CatalogEntry.InsertAction("Columna D", "Column D", "", "sheet:ins:D"),
+            CatalogEntry.InsertAction("Columna E", "Column E", "", "sheet:ins:E"),
+          )
+        )
+        return list
+      }
       else -> {}
     }
+
+    list += CatalogEntry.SubCategory(
+      "Verificar / Relación", "Verify / Relation", "=, ≠, <, >, ≤, ≥",
+      listOf(
+        CatalogEntry.InsertAction("= (Igual)", "= (Equal)", "", "op:="),
+        CatalogEntry.InsertAction("≠ (Diferente)", "≠ (Not Equal)", "", "op:≠"),
+        CatalogEntry.InsertAction("< (Menor que)", "< (Less than)", "", "op:<"),
+        CatalogEntry.InsertAction("> (Mayor que)", "> (Greater than)", "", "op:>"),
+        CatalogEntry.InsertAction("≤ (Menor o igual)", "≤ (Less/Eq)", "", "op:≤"),
+        CatalogEntry.InsertAction("≥ (Mayor o igual)", "≥ (Greater/Eq)", "", "op:≥"),
+      )
+    )
 
     list += CatalogEntry.SubCategory(
       "Análisis func.", "Func Analysis", "∫, d/dx, Σ, Π, |x|, log",
@@ -90,15 +154,21 @@ object MenuBuilders {
         CatalogEntry.InsertAction("Σ(f(x))", "Σ(f(x))", "Sumatoria", "tpl:sum"),
         CatalogEntry.InsertAction("Π(f(x))", "Π(f(x))", "Productoria", "tpl:prod"),
         CatalogEntry.InsertAction("|x| (Valor abs.)", "|x| (Abs)", "Valor absoluto", "tpl:abs"),
+        CatalogEntry.InsertAction("log(x) (Base 10)", "log(x) (Base 10)", "Logaritmo decimal", "fn:log("),
         CatalogEntry.InsertAction("log_a(b)", "log_a(b)", "Logaritmo base a", "tpl:logbase"),
+        CatalogEntry.InsertAction("10^□", "10^□", "Potencia de 10", "tpl:pow10"),
+        CatalogEntry.InsertAction("e^□", "e^□", "Exponencial e^x", "tpl:powe"),
+        CatalogEntry.InsertAction("³√□", "³√□", "Raíz cúbica", "tpl:cbrt"),
         CatalogEntry.InsertAction("f( )", "f( )", "Función f(x)", "fn:f("),
         CatalogEntry.InsertAction("g( )", "g( )", "Función g(x)", "fn:g("),
+        CatalogEntry.InsertAction("PreAns", "PreAns", "Resultado previo", "var:PreAns"),
       )
     )
 
     list += CatalogEntry.SubCategory(
-      "Probabilidad", "Probability", "x!, nPr, nCr, Ran#, Norm",
+      "Probabilidad", "Probability", "%, x!, nPr, nCr, Ran#, Norm",
       listOf(
+        CatalogEntry.InsertAction("% (Porcentaje)", "% (Percent)", "Dividir por 100", "post:%"),
         CatalogEntry.InsertAction("x! (Factorial)", "x! (Factorial)", "", "post:!"),
         CatalogEntry.InsertAction("nPr (Permutación)", "nPr (Permutation)", "", "op:nPr"),
         CatalogEntry.InsertAction("nCr (Combinación)", "nCr (Combination)", "", "op:nCr"),
@@ -123,9 +193,11 @@ object MenuBuilders {
     )
 
     list += CatalogEntry.SubCategory(
-      "Ángulo / Coord", "Angle / Coord", "°, ʳ, ᵍ, Pol, Rec",
+      "Ángulo / Coord", "Angle / Coord", "° ' \", ʳ, ᵍ, Pol, Rec",
       listOf(
-        CatalogEntry.InsertAction("° (Grados)", "° (Degrees)", "", "post:°"),
+        CatalogEntry.InsertAction("° (Grados)", "° (Degrees)", "Sexagesimal", "post:°"),
+        CatalogEntry.InsertAction("' (Minutos)", "' (Minutes)", "Sexagesimal", "post:'"),
+        CatalogEntry.InsertAction("\" (Segundos)", "\" (Seconds)", "Sexagesimal", "post:\""),
         CatalogEntry.InsertAction("ʳ (Radianes)", "ʳ (Radians)", "", "post:ʳ"),
         CatalogEntry.InsertAction("ᵍ (Gradianes)", "ᵍ (Gradians)", "", "post:ᵍ"),
         CatalogEntry.InsertAction("Pol(x, y)", "Pol(x, y)", "Rect. a Polar", "fn:Pol("),
@@ -183,6 +255,7 @@ object MenuBuilders {
   }
 
   fun buildToolsMenu(state: CalculatorUiState): List<CatalogEntry> {
+    val s = state.settings
     return when (state.mode) {
       CalcMode.BASE_N -> listOf(
         CatalogEntry.InsertAction("Cambiar a DEC", "Switch to DEC", "Base 10", "base:DEC"),
@@ -202,13 +275,15 @@ object MenuBuilders {
         CatalogEntry.InsertAction("Editar f(x)", "Edit f(x)", "", "tool:table_f"),
         CatalogEntry.InsertAction("Editar g(x)", "Edit g(x)", "", "tool:table_g"),
         CatalogEntry.InsertAction("Rango de tabla", "Table Range", "Inicio / Fin / Paso", "tool:table_range"),
+        CatalogEntry.InsertAction("Tipo tabla", "Table Type", if (state.tableState.showG) "f(x), g(x)" else "f(x)", "tool:table_type"),
         CatalogEntry.InsertAction("Generar tabla", "Generate Table", "", "tool:table_exec"),
       )
       CalcMode.STATISTICS -> listOf(
-        CatalogEntry.InsertAction("Ver Resultados", "View Results", "x̄, σx, regresión", "tool:stat_results"),
+        CatalogEntry.InsertAction("Cálc. Est.", "Stat Calc", "x̄, σx, regresión", "tool:stat_calc"),
+        CatalogEntry.InsertAction("Ver Resultados", "View Results", "Resumen completo", "tool:stat_results"),
         CatalogEntry.InsertAction("Editar Datos", "Edit Data", "Tabla x / y", "tool:stat_data"),
         CatalogEntry.InsertAction("Cambiar Tipo Est.", "Change Stat Type", "1-Var / Regresiones", "tool:stat_type"),
-        CatalogEntry.InsertAction("Frecuencia Sí/No", "Frequency On/Off", "", "tool:stat_freq"),
+        CatalogEntry.InsertAction("Frecuencia Sí/No", "Frequency On/Off", if (s.statFrequency) "Sí" else "No", "tool:stat_freq"),
       )
       CalcMode.EQUATION -> listOf(
         CatalogEntry.InsertAction("Tipo de ecuación", "Equation Type", "Simul / Polinómica / Solver", "tool:eq_menu"),
@@ -216,18 +291,66 @@ object MenuBuilders {
         CatalogEntry.InsertAction("Guardar en Variable", "Store to Variable", "A–F, x, y, z", "tool:store"),
         CatalogEntry.InsertAction("Generar código QR", "Generate QR Code", "SHIFT + x", "tool:qr"),
       )
-      CalcMode.SPREADSHEET -> listOf(
-        CatalogEntry.InsertAction("Insertar =SUM(A1:A5)", "Insert =SUM(A1:A5)", "Suma de rango", "tool:sheet_sum"),
-        CatalogEntry.InsertAction("Insertar =MEAN(A1:A5)", "Insert =MEAN(A1:A5)", "Promedio de rango", "tool:sheet_mean"),
-        CatalogEntry.InsertAction("Borrar hoja", "Clear Sheet", "Vaciar celdas", "tool:sheet_clear"),
-      )
-      else -> listOf(
-        CatalogEntry.InsertAction("Deshacer edición", "Undo Edit", "Ctrl+Z", "tool:undo"),
-        CatalogEntry.InsertAction("Guardar en Variable", "Store to Variable", "A–F, x, y, z", "tool:store"),
-        CatalogEntry.InsertAction("Definir f(x) / g(x)", "Define f(x) / g(x)", "Funciones", "tool:fx_menu"),
-        CatalogEntry.InsertAction("Generar código QR", "Generate QR Code", "SHIFT + x", "tool:qr"),
-        CatalogEntry.InsertAction("Limpiar historial", "Clear History", "", "tool:clear_hist"),
-      )
+      CalcMode.SPREADSHEET -> {
+        val sh = state.spreadsheetState
+        val clipInfo = sh.clipboardRaw?.let { it.take(12) } ?: s.tr("Vacío", "Empty")
+        listOf(
+          CatalogEntry.InsertAction("Cortar y Pegar", "Cut & Paste", sh.cellName(), "tool:sheet_cut"),
+          CatalogEntry.InsertAction("Copiar y Pegar", "Copy & Paste", sh.cellName(), "tool:sheet_copy"),
+          CatalogEntry.InsertAction("Pegar aquí", "Paste Here", clipInfo, "tool:sheet_paste"),
+          CatalogEntry.InsertAction("Rellenar fórmula", "Fill Formula", "Desplazar refs", "tool:sheet_fill_formula"),
+          CatalogEntry.InsertAction("Rellenar valor", "Fill Value", "Copiar cte.", "tool:sheet_fill_value"),
+          CatalogEntry.InsertAction("Insertar =SUM(A1:A5)", "Insert =SUM(A1:A5)", "", "tool:sheet_sum"),
+          CatalogEntry.InsertAction("Insertar =MEAN(A1:A5)", "Insert =MEAN(A1:A5)", "", "tool:sheet_mean"),
+          CatalogEntry.InsertAction("Insertar =MIN(A1:A5)", "Insert =MIN(A1:A5)", "", "tool:sheet_min"),
+          CatalogEntry.InsertAction("Insertar =MAX(A1:A5)", "Insert =MAX(A1:A5)", "", "tool:sheet_max"),
+          CatalogEntry.InsertAction("Borrar hoja", "Clear Sheet", "Vaciar A1:E45", "tool:sheet_clear"),
+        )
+      }
+      CalcMode.MATH_BOX -> when (state.mathBoxState.type) {
+        MathBoxType.DICE, MathBoxType.COIN -> listOf(
+          CatalogEntry.InsertAction(
+            if (state.mathBoxState.diceShowList) "Ver Frecuencias" else "Ver Lista intentos",
+            if (state.mathBoxState.diceShowList) "View Frequency" else "View Roll List",
+            "", "tool:mbox_toggle_list"
+          ),
+          CatalogEntry.InsertAction("Cambiar herramienta", "Change Tool", "Caja Mat.", "tool:mbox_menu"),
+        )
+        MathBoxType.NUMBER_LINE -> listOf(
+          CatalogEntry.InsertAction("Restablecer zoom/vista", "Reset Zoom/View", "1x", "tool:mbox_nl_reset"),
+          CatalogEntry.InsertAction("Cambiar herramienta", "Change Tool", "Caja Mat.", "tool:mbox_menu"),
+        )
+        MathBoxType.CIRCLE -> listOf(
+          CatalogEntry.InsertAction("Tipo: Círculo completo", "Type: Unit Circle", "360°", "tool:mbox_circle_unit"),
+          CatalogEntry.InsertAction("Tipo: Semicírculo", "Type: Half Circle", "180°", "tool:mbox_circle_half"),
+          CatalogEntry.InsertAction("Tipo: Reloj", "Type: Clock", "Horas/Min", "tool:mbox_circle_clock"),
+          CatalogEntry.InsertAction("Cambiar herramienta", "Change Tool", "Caja Mat.", "tool:mbox_menu"),
+        )
+      }
+      else -> {
+        val base = mutableListOf<CatalogEntry>()
+        if (state.currentResult is EvalResult.UnreducedFraction) {
+          base += CatalogEntry.InsertAction("Simplificar (÷ factor)", "Simplify (÷ factor)", "Paso manual", "tool:simplify_step")
+        }
+        base += CatalogEntry.InsertAction(
+          if (state.verifyModeEnabled) "Verificar: Activado" else "Verificar: Desact.",
+          if (state.verifyModeEnabled) "Verify: On" else "Verify: Off",
+          "=, ≠, <, >, ≤, ≥", "tool:toggle_verify"
+        )
+        base += CatalogEntry.InsertAction(
+          "Simplificar: ${s.tr(s.simplifyMode.labelEs, s.simplifyMode.labelEn)}",
+          "Simplify: ${s.simplifyMode.labelEn}",
+          "Auto / Manual", "tool:toggle_simplify"
+        )
+        base += listOf(
+          CatalogEntry.InsertAction("Deshacer edición", "Undo Edit", "SHIFT + ⌫", "tool:undo"),
+          CatalogEntry.InsertAction("Guardar en Variable", "Store to Variable", "A–F, x, y, z", "tool:store"),
+          CatalogEntry.InsertAction("Definir f(x) / g(x)", "Define f(x) / g(x)", "Funciones", "tool:fx_menu"),
+          CatalogEntry.InsertAction("Generar código QR", "Generate QR Code", "SHIFT + x", "tool:qr"),
+          CatalogEntry.InsertAction("Limpiar historial", "Clear History", "", "tool:clear_hist"),
+        )
+        base
+      }
     }
   }
 

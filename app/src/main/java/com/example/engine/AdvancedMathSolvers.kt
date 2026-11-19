@@ -32,6 +32,8 @@ enum class InequalityOp(val symbol: String) {
   LE("≤"),
 }
 
+data class PolyVertex(val isMinimum: Boolean, val x: Double, val y: Double)
+
 sealed class LinearSystemResult {
   data class Unique(val values: List<Double>) : LinearSystemResult()
   object NoSolution : LinearSystemResult()
@@ -206,6 +208,13 @@ object AdvancedMathSolvers {
     return roots.map { r ->
       if (abs(r.im) < 1e-9) ComplexNum(r.re, 0.0) else r
     }.sortedWith(compareBy({ abs(it.im) > 1e-9 }, { it.re }, { -it.im }))
+  }
+
+  fun quadraticVertex(a: Double, b: Double, c: Double): PolyVertex? {
+    if (abs(a) < 1e-14) return null
+    val xv = -b / (2.0 * a)
+    val yv = a * xv * xv + b * xv + c
+    return PolyVertex(isMinimum = a > 0.0, x = if (abs(xv) < 1e-14) 0.0 else xv, y = if (abs(yv) < 1e-14) 0.0 else yv)
   }
 
   // --- Numerical Equation Solver (f(x) = g(x)) ---
@@ -460,6 +469,62 @@ object AdvancedMathSolvers {
     )
   }
 
+  fun predictStatY(model: StatModelType, s: StatSummary, x: Double): Double {
+    return when (model) {
+      StatModelType.ONE_VAR -> throw CalcMathException()
+      StatModelType.LINEAR -> s.regA + s.regB * x
+      StatModelType.QUADRATIC -> s.regA + s.regB * x + s.regC * x * x
+      StatModelType.LOGARITHMIC -> {
+        if (x <= 0.0) throw CalcMathException()
+        s.regA + s.regB * ln(x)
+      }
+      StatModelType.EXP_E -> s.regA * exp(s.regB * x)
+      StatModelType.EXP_AB -> s.regA * s.regB.pow(x)
+      StatModelType.POWER -> {
+        if (x <= 0.0) throw CalcMathException()
+        s.regA * x.pow(s.regB)
+      }
+      StatModelType.INVERSE -> {
+        if (abs(x) < 1e-15) throw CalcMathException()
+        s.regA + s.regB / x
+      }
+    }
+  }
+
+  fun predictStatX(model: StatModelType, s: StatSummary, y: Double): Double {
+    return when (model) {
+      StatModelType.ONE_VAR -> throw CalcMathException()
+      StatModelType.LINEAR -> {
+        if (abs(s.regB) < 1e-15) throw CalcMathException()
+        (y - s.regA) / s.regB
+      }
+      StatModelType.QUADRATIC -> {
+        val roots = solvePolynomial(listOf(s.regC, s.regB, s.regA - y)).filter { abs(it.im) < 1e-8 }
+        roots.firstOrNull()?.re ?: throw CalcMathException()
+      }
+      StatModelType.LOGARITHMIC -> {
+        if (abs(s.regB) < 1e-15) throw CalcMathException()
+        exp((y - s.regA) / s.regB)
+      }
+      StatModelType.EXP_E -> {
+        if (s.regA == 0.0 || y / s.regA <= 0.0 || abs(s.regB) < 1e-15) throw CalcMathException()
+        ln(y / s.regA) / s.regB
+      }
+      StatModelType.EXP_AB -> {
+        if (s.regA == 0.0 || y / s.regA <= 0.0 || s.regB <= 0.0 || abs(s.regB - 1.0) < 1e-15) throw CalcMathException()
+        ln(y / s.regA) / ln(s.regB)
+      }
+      StatModelType.POWER -> {
+        if (s.regA == 0.0 || y / s.regA <= 0.0 || abs(s.regB) < 1e-15) throw CalcMathException()
+        (y / s.regA).pow(1.0 / s.regB)
+      }
+      StatModelType.INVERSE -> {
+        if (abs(y - s.regA) < 1e-15) throw CalcMathException()
+        s.regB / (y - s.regA)
+      }
+    }
+  }
+
   private fun fitLinear(xs: List<Double>, ys: List<Double>, ws: List<Double>): Triple<Double, Double, Double> {
     var sw = 0.0; var sx = 0.0; var sy = 0.0; var sxx = 0.0; var syy = 0.0; var sxy = 0.0
     for (i in xs.indices) {
@@ -596,30 +661,34 @@ object AdvancedMathSolvers {
     return -tmp + ln(2.5066282746310005 * ser / x)
   }
 
-  // --- Spreadsheet Formula Evaluator ---
+  // --- Spreadsheet Formula Evaluator (A1:E45 with $A$1 absolute references & Fill Formula) ---
+
+  private val sheetCellRefRegex = Regex("(\\$?)([A-E])(\\$?)(\\d{1,2})")
+  private val sheetRangeFuncRegex = Regex("(SUM|MEAN|MIN|MAX)\\((\\$?[A-E]\\$?\\d{1,2}):(\\$?[A-E]\\$?\\d{1,2})\\)")
 
   fun evaluateSpreadsheet(cells: Map<String, String>): Map<String, Double?> {
     val results = mutableMapOf<String, Double?>()
     val visiting = mutableSetOf<String>()
 
     fun evalCell(key: String): Double? {
-      if (results.containsKey(key)) return results[key]
-      val raw = cells[key]?.trim()
+      val normKey = key.replace("$", "").uppercase()
+      if (results.containsKey(normKey)) return results[normKey]
+      val raw = cells[normKey]?.trim()
       if (raw.isNullOrEmpty()) return null
       if (!raw.startsWith("=")) {
         val v = raw.toDoubleOrNull()
-        results[key] = v
+        results[normKey] = v
         return v
       }
-      if (!visiting.add(key)) return Double.NaN
+      if (!visiting.add(normKey)) return Double.NaN
       val expr = raw.drop(1).uppercase()
       val v = try {
         evalSheetExpr(expr, ::evalCell)
       } catch (_: Exception) {
         Double.NaN
       }
-      visiting.remove(key)
-      results[key] = v
+      visiting.remove(normKey)
+      results[normKey] = v
       return v
     }
 
@@ -628,14 +697,12 @@ object AdvancedMathSolvers {
   }
 
   private fun evalSheetExpr(expr: String, lookup: (String) -> Double?): Double {
-    // Expand SUM(A1:B3), MEAN(...), MIN(...), MAX(...)
     var expanded = expr.replace(" ", "")
-    val funcRegex = Regex("(SUM|MEAN|MIN|MAX)\\(([A-E]\\d+):([A-E]\\d+)\\)")
     while (true) {
-      val match = funcRegex.find(expanded) ?: break
+      val match = sheetRangeFuncRegex.find(expanded) ?: break
       val fn = match.groupValues[1]
-      val start = match.groupValues[2]
-      val end = match.groupValues[3]
+      val start = match.groupValues[2].replace("$", "")
+      val end = match.groupValues[3].replace("$", "")
       val vals = expandRange(start, end).mapNotNull(lookup).filter { !it.isNaN() }
       val agg = when (fn) {
         "SUM" -> vals.sum()
@@ -644,12 +711,12 @@ object AdvancedMathSolvers {
         "MAX" -> vals.maxOrNull() ?: 0.0
         else -> 0.0
       }
-      expanded = expanded.replaceRange(match.range, agg.toString())
+      expanded = expanded.replaceRange(match.range, "($agg)")
     }
-    val cellRegex = Regex("[A-E]\\d+")
     var circError = false
-    expanded = cellRegex.replace(expanded) { m ->
-      val v = lookup(m.value) ?: 0.0
+    expanded = sheetCellRefRegex.replace(expanded) { m ->
+      val key = "${m.groupValues[2]}${m.groupValues[4]}"
+      val v = lookup(key) ?: 0.0
       if (v.isNaN()) {
         circError = true
         "0"
@@ -661,11 +728,82 @@ object AdvancedMathSolvers {
     return PlainArithmeticParser(expanded).parseExpr()
   }
 
+  fun parseCellRef(ref: String): Pair<Int, Int>? {
+    val clean = ref.trim().uppercase().replace("$", "")
+    if (clean.length < 2) return null
+    val col = clean[0] - 'A'
+    val row = clean.drop(1).toIntOrNull()?.minus(1) ?: return null
+    if (col !in 0..4 || row !in 0..44) return null
+    return col to row
+  }
+
+  fun shiftFormulaReferences(formula: String, dCol: Int, dRow: Int): String {
+    if (!formula.startsWith("=")) return formula
+    val body = formula.drop(1).uppercase()
+    val shifted = sheetCellRefRegex.replace(body) { m ->
+      val colAbs = m.groupValues[1] == "$"
+      val colIdx = m.groupValues[2][0] - 'A'
+      val rowAbs = m.groupValues[3] == "$"
+      val rowIdx = (m.groupValues[4].toIntOrNull() ?: 1) - 1
+      val newCol = if (colAbs) colIdx else (colIdx + dCol).coerceIn(0, 4)
+      val newRow = if (rowAbs) rowIdx else (rowIdx + dRow).coerceIn(0, 44)
+      val cPrefix = if (colAbs) "$" else ""
+      val rPrefix = if (rowAbs) "$" else ""
+      "$cPrefix${'A' + newCol}$rPrefix${newRow + 1}"
+    }
+    return "=$shifted"
+  }
+
+  fun fillSpreadsheetFormula(
+    cells: Map<String, String>,
+    sourceCol: Int,
+    sourceRow: Int,
+    formula: String,
+    rangeStr: String,
+  ): Map<String, String> {
+    val parts = rangeStr.trim().uppercase().split(":")
+    val startRef = parseCellRef(parts.getOrNull(0) ?: "") ?: return cells
+    val endRef = parseCellRef(parts.getOrNull(1) ?: parts.getOrNull(0) ?: "") ?: startRef
+    val cMin = min(startRef.first, endRef.first)
+    val cMax = max(startRef.first, endRef.first)
+    val rMin = min(startRef.second, endRef.second)
+    val rMax = max(startRef.second, endRef.second)
+    val out = cells.toMutableMap()
+    for (c in cMin..cMax) {
+      for (r in rMin..rMax) {
+        val targetName = "${'A' + c}${r + 1}"
+        out[targetName] = shiftFormulaReferences(formula, c - sourceCol, r - sourceRow)
+      }
+    }
+    return out
+  }
+
+  fun fillSpreadsheetValue(
+    cells: Map<String, String>,
+    valueStr: String,
+    rangeStr: String,
+  ): Map<String, String> {
+    val parts = rangeStr.trim().uppercase().split(":")
+    val startRef = parseCellRef(parts.getOrNull(0) ?: "") ?: return cells
+    val endRef = parseCellRef(parts.getOrNull(1) ?: parts.getOrNull(0) ?: "") ?: startRef
+    val cMin = min(startRef.first, endRef.first)
+    val cMax = max(startRef.first, endRef.first)
+    val rMin = min(startRef.second, endRef.second)
+    val rMax = max(startRef.second, endRef.second)
+    val out = cells.toMutableMap()
+    for (c in cMin..cMax) {
+      for (r in rMin..rMax) {
+        out["${'A' + c}${r + 1}"] = valueStr
+      }
+    }
+    return out
+  }
+
   private fun expandRange(start: String, end: String): List<String> {
     val c1 = start[0]
-    val r1 = start.drop(1).toIntOrNull() ?: return emptyList()
+    val r1 = (start.drop(1).toIntOrNull() ?: return emptyList()).coerceIn(1, 45)
     val c2 = end[0]
-    val r2 = end.drop(1).toIntOrNull() ?: return emptyList()
+    val r2 = (end.drop(1).toIntOrNull() ?: return emptyList()).coerceIn(1, 45)
     val out = mutableListOf<String>()
     for (c in min(c1.code, c2.code)..max(c1.code, c2.code)) {
       for (r in min(r1, r2)..max(r1, r2)) {

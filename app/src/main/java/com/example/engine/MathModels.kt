@@ -59,6 +59,21 @@ enum class BaseNMode(val radix: Int, val label: String) {
   OCT(8, "OCT"),
 }
 
+enum class SimplifyMode(val labelEs: String, val labelEn: String) {
+  AUTO("Automático", "Auto"),
+  MANUAL("Manual", "Manual"),
+}
+
+enum class QrVersion(val labelEs: String, val labelEn: String, val minVersion: Int) {
+  V3("Versión 3", "Version 3", 3),
+  V11("Versión 11", "Version 11", 4),
+}
+
+enum class AutoPowerOff(val labelEs: String, val labelEn: String, val minutes: Int) {
+  MIN_10("10 min", "10 min", 10),
+  MIN_60("60 min", "60 min", 60),
+}
+
 enum class LcdThemeMode(val labelEs: String, val labelEn: String) {
   CLASSIC("LCD Clásico", "Classic LCD"),
   PAPER("Papel Blanco", "Paper White"),
@@ -78,12 +93,18 @@ data class CalcSettings(
   val fractionFormat: FractionFormat = FractionFormat.IMPROPER,
   val complexFormat: ComplexFormat = ComplexFormat.RECTANGULAR,
   val statFrequency: Boolean = false,
+  val digitSeparator: Boolean = false,
+  val simplifyMode: SimplifyMode = SimplifyMode.AUTO,
+  val qrVersion: QrVersion = QrVersion.V11,
+  val autoPowerOff: AutoPowerOff = AutoPowerOff.MIN_10,
   val lcdContrast: Float = 0.85f,
   val lcdTheme: LcdThemeMode = LcdThemeMode.CLASSIC,
   val language: CalcLanguage = CalcLanguage.ES,
   val hapticsEnabled: Boolean = true,
 ) {
   val isSpanish: Boolean get() = language == CalcLanguage.ES
+  val isLinearInput: Boolean get() = inputOutput == InputOutputMode.LINE_LINE || inputOutput == InputOutputMode.LINE_DEC
+  val isDecimalOutput: Boolean get() = inputOutput == InputOutputMode.MATH_DEC || inputOutput == InputOutputMode.LINE_DEC
   fun tr(es: String, en: String): String = if (isSpanish) es else en
 }
 
@@ -291,10 +312,16 @@ object MathEditor {
     return MathRow(newItems)
   }
 
-  fun insertToken(doc: EditorDocument, token: MathElement.Token): EditorDocument {
+  fun insertToken(doc: EditorDocument, token: MathElement.Token, overwrite: Boolean = false): EditorDocument {
     val targetRow = getRowAt(doc.root, doc.cursor.steps)
     val idx = doc.cursor.index.coerceIn(0, targetRow.items.size)
-    val newItems = targetRow.items.toMutableList().apply { add(idx, token) }
+    val newItems = targetRow.items.toMutableList().apply {
+      if (overwrite && idx < size) {
+        this[idx] = token
+      } else {
+        add(idx, token)
+      }
+    }
     val newRoot = updateRowAt(doc.root, doc.cursor.steps) { MathRow(newItems) }
     return EditorDocument(newRoot, doc.cursor.copy(index = idx + 1))
   }

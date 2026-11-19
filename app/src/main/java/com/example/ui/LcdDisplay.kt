@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.engine.*
@@ -27,6 +28,8 @@ fun LcdDisplay(
   onSelectOverlayItem: (Int) -> Unit,
   onContrastChange: (Float) -> Unit,
   onSelectSpreadsheetCell: (Int, Int) -> Unit,
+  onSpreadsheetInsert: (String) -> Unit,
+  lcdHeight: Dp = 152.dp,
   modifier: Modifier = Modifier,
 ) {
   val basePalette = if (state.settings.lcdTheme == LcdThemeMode.CLASSIC) ClassicClassWizLcd else PaperWhiteLcd
@@ -47,14 +50,13 @@ fun LcdDisplay(
         )
       )
       .border(1.2.dp, BezelInnerRim, RoundedCornerShape(10.dp))
-      .padding(horizontal = 8.dp, vertical = 7.dp),
+      .padding(horizontal = 8.dp, vertical = 6.dp),
   ) {
     if (!state.isPoweredOn) {
-      // Powered-off LCD glass
       Box(
         modifier = Modifier
           .fillMaxWidth()
-          .height(142.dp)
+          .height(lcdHeight)
           .clip(RoundedCornerShape(4.dp))
           .background(palette.backgroundShade.copy(alpha = 0.72f))
           .border(1.dp, palette.bezelShadow, RoundedCornerShape(4.dp)),
@@ -75,7 +77,7 @@ fun LcdDisplay(
     Column(
       modifier = Modifier
         .fillMaxWidth()
-        .height(142.dp)
+        .height(lcdHeight)
         .clip(RoundedCornerShape(4.dp))
         .background(
           Brush.verticalGradient(
@@ -122,7 +124,7 @@ fun LcdDisplay(
                 else -> true
               }
               if (isModeCustom) {
-                LcdModeBodyView(state, palette, onSelectSpreadsheetCell)
+                LcdModeBodyView(state, palette, onSelectSpreadsheetCell, onSpreadsheetInsert)
               } else {
                 StandardCalcLcdBody(state, palette)
               }
@@ -165,12 +167,19 @@ private fun LcdStatusBar(state: CalculatorUiState, palette: LcdPalette) {
         Box(Modifier.size(13.dp, 13.dp))
       }
 
+      // Overwrite / INS indicator when toggled via SHIFT + DEL
+      if (state.insertOverwriteMode) {
+        StatusBadge("INS", inverted = true, palette = palette)
+      }
+
       // Angle unit [D] [R] [G]
       StatusBadge(state.settings.angleUnit.badge, inverted = false, palette = palette)
 
-      // Math I/O symbol
-      if (state.settings.inputOutput == InputOutputMode.MATH_MATH || state.settings.inputOutput == InputOutputMode.MATH_DEC) {
+      // Math I/O or Line I/O symbol
+      if (!state.settings.isLinearInput) {
         Text("√", color = palette.inkDarkest, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = JetBrainsMonoFamily)
+      } else {
+        StatusBadge("Lin", inverted = false, palette = palette)
       }
 
       // Number format FIX / SCI
@@ -178,6 +187,14 @@ private fun LcdStatusBar(state: CalculatorUiState, palette: LcdPalette) {
         NumberFormatMode.FIX -> StatusBadge("FIX", inverted = false, palette = palette)
         NumberFormatMode.SCI -> StatusBadge("SCI", inverted = false, palette = palette)
         else -> {}
+      }
+
+      // Verify / Manual Simplify indicators
+      if (state.verifyModeEnabled) {
+        StatusBadge("VER", inverted = true, palette = palette)
+      }
+      if (state.settings.simplifyMode == SimplifyMode.MANUAL) {
+        StatusBadge("MAN", inverted = false, palette = palette)
       }
 
       // Complex i indicator
@@ -200,9 +217,10 @@ private fun LcdStatusBar(state: CalculatorUiState, palette: LcdPalette) {
         Text(
           text = state.settings.tr(state.mode.titleEs, state.mode.titleEn),
           color = palette.inkDark,
-          fontSize = 9.5.sp,
+          fontSize = 9.sp,
           fontFamily = IbmPlexSansFamily,
           fontWeight = FontWeight.SemiBold,
+          maxLines = 1,
         )
       }
     }
@@ -273,6 +291,7 @@ private fun StandardCalcLcdBody(state: CalculatorUiState, palette: LcdPalette) {
         currentSteps = emptyList(),
         palette = palette,
         fontSize = 19.sp,
+        linearMode = state.settings.isLinearInput,
         modifier = Modifier.fillMaxWidth(),
       )
     }
@@ -336,6 +355,7 @@ private fun FxInlineEditorLcdBody(state: CalculatorUiState, palette: LcdPalette)
         currentSteps = emptyList(),
         palette = palette,
         fontSize = 19.sp,
+        linearMode = s.isLinearInput,
         modifier = Modifier.fillMaxWidth(),
       )
     }
